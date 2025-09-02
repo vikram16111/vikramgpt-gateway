@@ -3,5 +3,5 @@ uvicorn
 python-dotenv
 openai>=1.40.0
 pinecone>=3.0.0
-boto3
-tqdm
+boto3>=1.34.0
+
