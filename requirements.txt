@@ -1,10 +1,16 @@
-fastapi>=0.110.0
-uvicorn>=0.29.0
-python-dotenv>=1.0.1
-openai>=1.40.0
-pinecone>=3.0.0
-boto3>=1.34.0
-tqdm>=4.65.0
+# web app
 fastapi>=0.111.0
+starlette>=0.37.2
+pydantic>=2.8.2
 uvicorn[standard]>=0.30.0
 click>=8.1.7
+
+# llm + vector db
+openai>=1.40.0
+pinecone-client>=3.0.0,<6
+
+# aws + utils
+boto3>=1.34.0
+python-dotenv>=1.0.1
+requests>=2.32.0
+tqdm>=4.66.0
