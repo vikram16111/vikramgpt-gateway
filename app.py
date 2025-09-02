@@ -6,26 +6,27 @@ from dotenv import load_dotenv
 from pinecone import Pinecone
 from openai import OpenAI
 
-# Load env
+# --- Config & Clients ---------------------------------------------------------
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt")
-TOP_K = int(os.getenv("TOP_K", "8"))
+TOP_K_DEFAULT = int(os.getenv("TOP_K", "8"))
 
 if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY")
+    raise RuntimeError("Missing OPENAI_API_KEY or PINECONE_API_KEY")
 
-# Clients
 app = FastAPI(title="VikramGPT Gateway", version="1.0")
+
 oc = OpenAI(api_key=OPENAI_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)  # your index must already exist
+index = pc.Index(PINECONE_INDEX)  # assumes index already exists and is populated
 
-# Models
+# --- Models -------------------------------------------------------------------
 class AskRequest(BaseModel):
     query: str
-    mode: Optional[str] = "concise"
+    mode: Optional[str] = "concise"  # concise|executive|legal
+    top_k: Optional[int] = None      # override default if you want
 
 class Cit(BaseModel):
     doc_id: str = ""
@@ -38,31 +39,43 @@ class AskResponse(BaseModel):
     answer: str
     citations: List[Cit]
 
-# Embed
+# --- Helpers ------------------------------------------------------------------
+SYSTEM = "You are VikramGPT. Use ONLY the provided context. Cite like [1], [2]."
+
 def embed(text: str) -> List[float]:
     e = oc.embeddings.create(model="text-embedding-3-large", input=text)
     return e.data[0].embedding
 
-SYSTEM = "You are VikramGPT. Use ONLY the provided context. Cite like [1], [2]."
-
-def build_prompt(q, matches, mode):
-    style = {
+def style_for(mode: str) -> str:
+    return {
         "concise": "Answer in 5–10 sentences.",
         "executive": "Bullet points for an executive.",
-        "legal": "Quote exact lines; be neutral."
-    }.get(mode, "Answer in 5–10 sentences.")
+        "legal": "Quote exact lines; be neutral and precise."
+    }.get(mode or "concise", "Answer in 5–10 sentences.")
 
+def build_prompt(q: str, matches: List[dict], mode: str) -> str:
     ctx_lines = []
     for i, m in enumerate(matches, start=1):
         md = m.get("metadata", {}) or {}
         snippet = (md.get("text", "") or "")[:2000]
         ref = f'[{i}] {md.get("title","")} {md.get("s3_path","")} p.{md.get("page","")}'
         ctx_lines.append(ref + "\n" + snippet)
+    return f"""{SYSTEM}
 
-    return f"{SYSTEM}\n\n# Query\n{q}\n\n# Style\n{style}\n\n# Context\n" + "\n".join(ctx_lines)
+# Query
+{q}
 
-def to_citations(matches):
-    out = []
+# Style
+{style_for(mode)}
+
+# Context (ranked)
+{chr(10).join(ctx_lines)}
+
+Answer now with references like [1], [2].
+"""
+
+def to_citations(matches: List[dict]) -> List[Cit]:
+    out: List[Cit] = []
     for m in matches[:5]:
         md = m.get("metadata", {}) or {}
         out.append(Cit(
@@ -74,29 +87,47 @@ def to_citations(matches):
         ))
     return out
 
+# --- Routes -------------------------------------------------------------------
+@app.get("/")
+def root():
+    return {
+        "status": "VikramGPT Gateway is live 🚀",
+        "index": PINECONE_INDEX,
+        "endpoints": ["/healthz", "/ask"]
+    }
+
 @app.get("/healthz")
-def health():
+def healthz():
     return {"ok": True}
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    q = req.query.strip()
+    q = (req.query or "").strip()
     if not q:
-        raise HTTPException(400, "Empty query")
+        raise HTTPException(status_code=400, detail="Empty query")
 
-    qvec = embed(q)
-    res = index.query(vector=qvec, top_k=TOP_K, include_metadata=True)
+    try:
+        qvec = embed(q)
+        top_k = req.top_k or TOP_K_DEFAULT
+        res = index.query(vector=qvec, top_k=top_k, include_metadata=True)
 
-    matches = [{"score": m.score, "metadata": getattr(m, "metadata", {}) or {}} for m in res.matches]
-    if not matches:
-        return AskResponse(answer="No context found.", citations=[])
+        # Normalize matches (Pinecone SDK returns objects with attributes)
+        matches = [{"score": m.score, "metadata": (getattr(m, "metadata", {}) or {})}
+                   for m in res.matches or []]
 
-    prompt = build_prompt(q, matches, req.mode)
-    chat = oc.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "system", "content": SYSTEM},
-                  {"role": "user", "content": prompt}],
-        temperature=0.2
-    )
-    answer = chat.choices[0].message.content.strip()
-    return AskResponse(answer=answer, citations=to_citations(matches))
+        if not matches:
+            return AskResponse(answer="No relevant context found.", citations=[])
+
+        prompt = build_prompt(q, matches, req.mode or "concise")
+        chat = oc.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "system", "content": SYSTEM},
+                      {"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        answer = chat.choices[0].message.content.strip()
+        return AskResponse(answer=answer, citations=to_citations(matches))
+
+    except Exception as e:
+        # Surface a readable error to client while keeping 500 status
+        raise HTTPException(status_code=500, detail=f"Query failed: {type(e).__name__}: {e}")
