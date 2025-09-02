@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 import pinecone
 from openai import OpenAI
 
-# ---------- ENV & CLIENTS ----------
+# =======================
+# ENV & CLIENTS
+# =======================
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -19,27 +21,31 @@ TOP_K = int(os.getenv("TOP_K", "8"))
 
 # Optional (used by /ingest/s3-object)
 AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
-INGEST_TOKEN = os.getenv("INGEST_TOKEN")  # set this in Render for event-driven
+INGEST_TOKEN = os.getenv("INGEST_TOKEN")  # set this secret in Render
 
 if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY env vars.")
+    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY environment variables.")
 
 app = FastAPI(title="VikramGPT Gateway", version="1.0")
 
-# OpenAI
+# OpenAI client
 oc = OpenAI(api_key=OPENAI_API_KEY)
 
-# Pinecone
+# Pinecone client
 pinecone.init(api_key=PINECONE_API_KEY)
 index = pinecone.Index(PINECONE_INDEX)
 
-# Embedding dims for text-embedding-3-large
+# Embedding dimension for text-embedding-3-large
 EMBED_DIM = int(os.getenv("EMBED_DIM", "3072"))
 
-# ---------- MODELS ----------
+
+# =======================
+# MODELS
+# =======================
 class AskRequest(BaseModel):
     query: str
     mode: Optional[str] = "concise"  # "concise" | "detailed"
+
 
 class Cite(BaseModel):
     doc_id: Optional[str] = None
@@ -48,12 +54,19 @@ class Cite(BaseModel):
     page: Optional[int] = None
     score: Optional[float] = None
 
+
 class AskResponse(BaseModel):
     answer: str
     citations: List[Cite] = []
 
-# ---------- HELPERS ----------
+
+# =======================
+# HELPERS
+# =======================
 def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
+    """
+    Simple context-preserving chunker for long text.
+    """
     text = (text or "").replace("\r", "")
     out, start, n = [], 0, len(text)
     while start < n:
@@ -64,41 +77,65 @@ def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
         start = max(0, end - overlap)
     return out
 
+
 def already_indexed_version(doc_id: str, etag: str) -> bool:
+    """
+    Quick filter check to avoid double-indexing the same version.
+    """
     try:
         zero = [0.0] * EMBED_DIM
         r = index.query(
-            vector=zero, top_k=1,
+            vector=zero,
+            top_k=1,
             filter={"doc_id": {"$eq": doc_id}, "doc_etag": {"$eq": etag}},
         )
         return len(r.get("matches", [])) > 0
     except Exception:
+        # Fail-open: if filter/connection fails, let the ingest proceed
         return False
+
 
 def vector_id(doc_id: str, etag: str, chunk_idx: int, chunk: str) -> str:
     h = hashlib.md5(chunk.encode("utf-8")).hexdigest()[:10]
     return f"{doc_id}::v:{etag[:8]}::c:{chunk_idx}::h:{h}"
 
-# ---------- ROOT / HEALTH ----------
+
+# =======================
+# ROOT / HEALTH
+# =======================
 @app.get("/")
 def root():
-    return {"status": "VikramGPT Gateway is live 💥", "index": PINECONE_INDEX, "endpoints": ["/healthz", "/ask"]}
+    return {
+        "status": "VikramGPT Gateway is live 💥",
+        "index": PINECONE_INDEX,
+        "endpoints": ["/healthz", "/ask"],
+    }
+
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
-# ---------- /ASK ----------
+
+# =======================
+# /ASK
+# =======================
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
     query = (req.query or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
-    emb = oc.embeddings.create(model="text-embedding-3-large", input=[query]).data[0].embedding
+    # 1) Embed the query
+    emb = oc.embeddings.create(
+        model="text-embedding-3-large", input=[query]
+    ).data[0].embedding
+
+    # 2) Retrieve from Pinecone
     results = index.query(vector=emb, top_k=TOP_K, include_metadata=True)
 
-    snippets = []
+    # 3) Build context & citations
+    snippets: List[str] = []
     citations: List[Cite] = []
     for m in results.get("matches", []):
         meta = m.get("metadata", {}) or {}
@@ -124,11 +161,15 @@ def ask(req: AskRequest):
             citations=citations,
         )
 
-    context = "\n\n---\n\n".join(snippets[: TOP_K])
+    context = "\n\n---\n\n".join(snippets[:TOP_K])
 
+    # 4) Ask the LLM
     model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
-    style = "Keep it concise and cite specific sources if helpful." if req.mode == "concise" else \
-            "Be thorough and structured. Cite sources."
+    style = (
+        "Keep it concise and cite specific sources if helpful."
+        if req.mode == "concise"
+        else "Be thorough and structured. Cite sources."
+    )
 
     prompt = f"""You are VikramGPT. Answer the user's question using ONLY the context.
 If something is not covered in the context, say you don't know.
@@ -143,7 +184,10 @@ Question: {query}
     chat = oc.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "You are a careful assistant that only uses provided context."},
+            {
+                "role": "system",
+                "content": "You are a careful assistant that only uses provided context.",
+            },
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
@@ -152,16 +196,19 @@ Question: {query}
     answer = chat.choices[0].message.content.strip()
     return AskResponse(answer=answer, citations=citations)
 
-# ---------- EVENT-DRIVEN S3 INGEST (secured) ----------
+
+# =======================
+# EVENT-DRIVEN S3 INGEST (secured)
+# =======================
 @app.post("/ingest/s3-object")
 def ingest_single_s3_object(
     payload: dict,
-    x_ingest_token: Annotated[Optional[str], Header(alias="X-INGEST-TOKEN")] = None,
+    x_ingest_token: Annotated[Optional[str], Header(None, alias="X-INGEST-TOKEN")],
 ):
     """
-    Body: {"bucket":"<bucket>", "key":"path/to/file.txt"}
-    Header: X-INGEST-TOKEN: <your secret>
-    Only supports .txt and .md for now.
+    Body:  {"bucket":"<bucket>", "key":"path/to/file.txt"}
+    Header: X-INGEST-TOKEN: <your secret>  (must match Render env var INGEST_TOKEN)
+    Supports .txt and .md for now.
     """
     if not INGEST_TOKEN or x_ingest_token != INGEST_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -174,6 +221,7 @@ def ingest_single_s3_object(
     if not key.lower().endswith((".txt", ".md")):
         return {"ingested": False, "reason": "unsupported extension", "key": key}
 
+    # Read object from S3
     import boto3
     from botocore.client import Config
 
@@ -192,32 +240,39 @@ def ingest_single_s3_object(
     except Exception:
         text = body.decode("latin-1", errors="ignore")
 
+    # Skip if already indexed (same version)
     if already_indexed_version(key, etag):
         return {"ingested": False, "reason": "already indexed", "key": key, "etag": etag}
 
+    # Chunk
     chunks = chunk_text(text)
     if not chunks:
         return {"ingested": False, "reason": "no text", "key": key}
 
+    # Embed + upsert in small batches
     BATCH = 64
     pending = []
     for i in range(0, len(chunks), BATCH):
-        batch = chunks[i:i + BATCH]
+        batch = chunks[i : i + BATCH]
         r = oc.embeddings.create(model="text-embedding-3-large", input=batch)
         embs = [d.embedding for d in r.data]
+
         for j, (chunk, vec) in enumerate(zip(batch, embs), start=i):
             vid = vector_id(key, etag, j, chunk)
-            pending.append({
-                "id": vid,
-                "values": vec,
-                "metadata": {
-                    "doc_id": key,
-                    "doc_etag": etag,
-                    "chunk_index": j,
-                    "source": f"s3://{bucket}/{key}",
-                    "text": chunk,
+            pending.append(
+                {
+                    "id": vid,
+                    "values": vec,
+                    "metadata": {
+                        "doc_id": key,
+                        "doc_etag": etag,
+                        "chunk_index": j,
+                        "source": f"s3://{bucket}/{key}",
+                        "text": chunk,
+                    },
                 }
-            })
+            )
+
         index.upsert(vectors=pending)
         pending = []
 
