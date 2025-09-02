@@ -1,42 +1,48 @@
 import os
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException, Header, Depends
+import hashlib
+from typing import Optional, List
+
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from pinecone import Pinecone
+
+import pinecone
 from openai import OpenAI
 
-# ---------------------- Config ----------------------
+# ---------- ENV & CLIENTS ----------
 load_dotenv()
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt")
 TOP_K = int(os.getenv("TOP_K", "8"))
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # <— set this on Render
+
+# Optional (used by /ingest/s3-object)
+AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
+INGEST_TOKEN = os.getenv("INGEST_TOKEN")  # set this in Render for event-driven
 
 if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY")
+    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY env vars.")
 
-# ---------------------- Clients ----------------------
-app = FastAPI(title="VikramGPT Gateway", version="1.1")
+app = FastAPI(title="VikramGPT Gateway", version="1.0")
+
+# OpenAI
 oc = OpenAI(api_key=OPENAI_API_KEY)
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)  # assumes exists
 
-# ---------------------- Security ----------------------
-def require_api_key(x_api_key: Optional[str] = Header(None)):
-    # if ADMIN_TOKEN is set, enforce it; if not set, allow (dev mode)
-    if ADMIN_TOKEN and x_api_key != ADMIN_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+# Pinecone
+pinecone.init(api_key=PINECONE_API_KEY)
+index = pinecone.Index(PINECONE_INDEX)
 
-# ---------------------- Models ----------------------
+# Embedding dims for text-embedding-3-large
+EMBED_DIM = int(os.getenv("EMBED_DIM", "3072"))
+
+# ---------- MODELS ----------
 class AskRequest(BaseModel):
     query: str
-    mode: Optional[str] = "concise"
-    top_k: Optional[int] = None
+    mode: Optional[str] = "concise"  # "concise" | "detailed"
 
-class Cit(BaseModel):
-    doc_id: str = ""
+class Cite(BaseModel):
+    doc_id: Optional[str] = None
     title: Optional[str] = None
     s3_path: Optional[str] = None
     page: Optional[int] = None
@@ -44,100 +50,187 @@ class Cit(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
-    citations: List[Cit] = []
+    citations: List[Cite] = []
 
-# ---------------------- Helpers ----------------------
-SYSTEM = "You are VikramGPT. Use ONLY the provided context. Cite like [1], [2]."
-
-def embed(text: str) -> List[float]:
-    e = oc.embeddings.create(model="text-embedding-3-small", input=text)
-    return e.data[0].embedding
-
-def style_for(mode: str) -> str:
-    return {
-        "concise": "Answer in 5–10 sentences.",
-        "executive": "Bullet points for an executive.",
-        "legal": "Quote exact lines; be neutral and precise."
-    }.get((mode or "concise").lower(), "Answer in 5–10 sentences.")
-
-def build_prompt(q: str, matches: List[dict], mode: str) -> str:
-    ctx_lines = []
-    for i, m in enumerate(matches, start=1):
-        md = m.get("metadata", {}) or {}
-        snippet = (md.get("text", "") or "")[:2000]
-        ref = f'[{i}] {md.get("title","")} {md.get("s3_path","")} p.{md.get("page","")}'
-        ctx_lines.append(ref + "\n" + snippet)
-
-    return (
-        f"{SYSTEM}\n\n"
-        f"# Query\n{q}\n\n"
-        f"# Style\n{style_for(mode)}\n\n"
-        f"# Context (ranked)\n" + "\n".join(ctx_lines)
-    )
-
-def to_citations(matches: List[dict]) -> List[Cit]:
-    out: List[Cit] = []
-    for m in matches[:5]:
-        md = m.get("metadata", {}) or {}
-        out.append(Cit(
-            doc_id=md.get("doc_id", m.get("id", "")),
-            title=md.get("title"),
-            s3_path=md.get("s3_path"),
-            page=md.get("page"),
-            score=m.get("score"),
-        ))
+# ---------- HELPERS ----------
+def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
+    """
+    Simple context-preserving chunker for long text.
+    """
+    text = (text or "").replace("\r", "")
+    out, start, n = [], 0, len(text)
+    while start < n:
+        end = min(start + size, n)
+        out.append(text[start:end])
+        if end >= n:
+            break
+        start = max(0, end - overlap)
     return out
 
-# ---------------------- Routes ----------------------
+def already_indexed_version(doc_id: str, etag: str) -> bool:
+    """Quick filter check to avoid double indexing same version."""
+    try:
+        zero = [0.0] * EMBED_DIM
+        r = index.query(
+            vector=zero, top_k=1,
+            filter={"doc_id": {"$eq": doc_id}, "doc_etag": {"$eq": etag}},
+        )
+        return len(r.get("matches", [])) > 0
+    except Exception:
+        return False
+
+def vector_id(doc_id: str, etag: str, chunk_idx: int, chunk: str) -> str:
+    h = hashlib.md5(chunk.encode("utf-8")).hexdigest()[:10]
+    return f"{doc_id}::v:{etag[:8]}::c:{chunk_idx}::h:{h}"
+
+# ---------- ROOT / HEALTH ----------
 @app.get("/")
 def root():
-    return {"status": "VikramGPT Gateway is live 💫", "index": PINECONE_INDEX, "endpoints": ["/healthz", "/ask"]}
+    return {"status": "VikramGPT Gateway is live 💥", "index": PINECONE_INDEX, "endpoints": ["/healthz", "/ask"]}
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
-@app.post("/ask", response_model=AskResponse, dependencies=[Depends(require_api_key)])
-def ask(
-    req: AskRequest,
-    x_user_id: Optional[str] = Header(None)  # used for ACL filtering
-):
-    q = (req.query or "").strip()
-    if not q:
-        raise HTTPException(400, "Empty query")
+# ---------- /ASK ----------
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest):
+    query = (req.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
 
+    # 1) Embed the query
+    emb = oc.embeddings.create(model="text-embedding-3-large", input=[query]).data[0].embedding
+
+    # 2) Retrieve from Pinecone
+    results = index.query(vector=emb, top_k=TOP_K, include_metadata=True)
+
+    # 3) Build context & citations
+    snippets = []
+    citations: List[Cite] = []
+    for m in results.get("matches", []):
+        meta = m.get("metadata", {}) or {}
+        snippet = meta.get("text") or meta.get("content") or ""
+        if snippet:
+            snippets.append(snippet)
+        citations.append(
+            Cite(
+                doc_id=meta.get("doc_id"),
+                title=meta.get("title"),
+                s3_path=meta.get("source"),
+                page=meta.get("page"),
+                score=m.get("score"),
+            )
+        )
+
+    if not snippets:
+        return AskResponse(
+            answer=(
+                "The provided context does not contain any information about your query. "
+                "Please try rephrasing or upload relevant material to your S3 bucket."
+            ),
+            citations=citations,
+        )
+
+    context = "\n\n---\n\n".join(snippets[: TOP_K])
+
+    # 4) Ask the LLM
+    model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+    style = "Keep it concise and cite specific sources if helpful." if req.mode == "concise" else \
+            "Be thorough and structured. Cite sources."
+
+    prompt = f"""You are VikramGPT. Answer the user's question using ONLY the context.
+If something is not covered in the context, say you don't know.
+Write clearly. {style}
+
+Context:
+{context}
+
+Question: {query}
+"""
+
+    chat = oc.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a careful assistant that only uses provided context."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+
+    answer = chat.choices[0].message.content.strip()
+    return AskResponse(answer=answer, citations=citations)
+
+# ---------- EVENT-DRIVEN S3 INGEST (secured) ----------
+@app.post("/ingest/s3-object")
+def ingest_single_s3_object(payload: dict, x_ingest_token: str = Header(None)):
+    """
+    Body: {"bucket":"<bucket>", "key":"path/to/file.txt"}
+    Header: X-INGEST-TOKEN: <your secret>
+    Only supports .txt and .md for now.
+    """
+    if not INGEST_TOKEN or x_ingest_token != INGEST_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    bucket = payload.get("bucket")
+    key = payload.get("key")
+    if not bucket or not key:
+        raise HTTPException(status_code=400, detail="bucket and key required")
+
+    if not key.lower().endswith((".txt", ".md")):
+        return {"ingested": False, "reason": "unsupported extension", "key": key}
+
+    # Read object from S3
+    import boto3
+    from botocore.client import Config
+
+    s3 = boto3.client(
+        "s3",
+        region_name=AWS_REGION,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        config=Config(signature_version="s3v4"),
+    )
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    etag = (obj.get("ETag") or "").strip('"')
+    body = obj["Body"].read()
     try:
-        qvec = embed(q)
-        top_k = req.top_k or TOP_K
+        text = body.decode("utf-8", errors="ignore")
+    except Exception:
+        text = body.decode("latin-1", errors="ignore")
 
-        pc_filter = None
-        if x_user_id:
-            pc_filter = {"acl": {"$in": [x_user_id, "public"]}}
+    # Skip if already indexed (same version)
+    if already_indexed_version(key, etag):
+        return {"ingested": False, "reason": "already indexed", "key": key, "etag": etag}
 
-        res = index.query(
-            vector=qvec,
-            top_k=top_k,
-            include_metadata=True,
-            filter=pc_filter
-        )
+    # Chunk
+    chunks = chunk_text(text)
+    if not chunks:
+        return {"ingested": False, "reason": "no text", "key": key}
 
-        matches = [
-            {"id": m.id, "score": m.score, "metadata": (getattr(m, "metadata", {}) or {})}
-            for m in (res.matches or [])
-        ]
+    # Embed + upsert in batches
+    BATCH = 64
+    pending = []
+    for i in range(0, len(chunks), BATCH):
+        batch = chunks[i:i + BATCH]
+        r = oc.embeddings.create(model="text-embedding-3-large", input=batch)
+        embs = [d.embedding for d in r.data]
 
-        if not matches:
-            return AskResponse(answer="No relevant context found in your index.", citations=[])
+        for j, (chunk, vec) in enumerate(zip(batch, embs), start=i):
+            vid = vector_id(key, etag, j, chunk)
+            pending.append({
+                "id": vid,
+                "values": vec,
+                "metadata": {
+                    "doc_id": key,
+                    "doc_etag": etag,
+                    "chunk_index": j,
+                    "source": f"s3://{bucket}/{key}",
+                    "text": chunk,
+                }
+            })
 
-        prompt = build_prompt(q, matches, req.mode or "concise")
-        chat = oc.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "system", "content": SYSTEM},
-                      {"role": "user", "content": prompt}],
-            temperature=0.2
-        )
-        answer = chat.choices[0].message.content.strip()
-        return AskResponse(answer=answer, citations=to_citations(matches))
+        index.upsert(vectors=pending)
+        pending = []
 
-    except Exception as e:
-        raise HTTPException(500, f"Query failed: {type(e).__name__}: {e}")
+    return {"ingested": True, "chunks": len(chunks), "key": key, "etag": etag}
