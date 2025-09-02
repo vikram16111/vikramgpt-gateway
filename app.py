@@ -6,11 +6,13 @@ from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-import pinecone
 from openai import OpenAI
 
+# Pinecone (new client style)
+from pinecone import Pinecone
+
 # =======================
-# ENV & CLIENTS
+# ENV
 # =======================
 load_dotenv()
 
@@ -21,23 +23,39 @@ TOP_K = int(os.getenv("TOP_K", "8"))
 
 # Optional (used by /ingest/s3-object)
 AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
-INGEST_TOKEN = os.getenv("INGEST_TOKEN")  # set this secret in Render
+INGEST_TOKEN = os.getenv("INGEST_TOKEN")  # set this in Render (Settings → Environment)
 
 if not OPENAI_API_KEY or not PINECONE_API_KEY:
     raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY environment variables.")
 
-app = FastAPI(title="VikramGPT Gateway", version="1.0")
-
-# OpenAI client
-oc = OpenAI(api_key=OPENAI_API_KEY)
-
-# Pinecone client
-pinecone.init(api_key=PINECONE_API_KEY)
-index = pinecone.Index(PINECONE_INDEX)
-
 # Embedding dimension for text-embedding-3-large
 EMBED_DIM = int(os.getenv("EMBED_DIM", "3072"))
 
+# =======================
+# APP & CLIENTS
+# =======================
+app = FastAPI(title="VikramGPT Gateway", version="1.0")
+
+# OpenAI client (safe to construct at import time)
+oc = OpenAI(api_key=OPENAI_API_KEY)
+
+# Pinecone: lazy init to avoid startup crashes
+_pc: Optional[Pinecone] = None
+_pc_index = None
+
+def get_index():
+    """Get (and cache) a Pinecone Index handle. Never crash import/startup."""
+    global _pc, _pc_index
+    if _pc_index is not None:
+        return _pc_index
+    try:
+        if _pc is None:
+            _pc = Pinecone(api_key=PINECONE_API_KEY)
+        _pc_index = _pc.Index(PINECONE_INDEX)  # assumes index already exists
+        return _pc_index
+    except Exception as e:
+        # Defer the error to the endpoint call, with clear message
+        raise HTTPException(status_code=500, detail=f"Pinecone index init failed: {e}")
 
 # =======================
 # MODELS
@@ -46,7 +64,6 @@ class AskRequest(BaseModel):
     query: str
     mode: Optional[str] = "concise"  # "concise" | "detailed"
 
-
 class Cite(BaseModel):
     doc_id: Optional[str] = None
     title: Optional[str] = None
@@ -54,19 +71,14 @@ class Cite(BaseModel):
     page: Optional[int] = None
     score: Optional[float] = None
 
-
 class AskResponse(BaseModel):
     answer: str
     citations: List[Cite] = []
-
 
 # =======================
 # HELPERS
 # =======================
 def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
-    """
-    Simple context-preserving chunker for long text.
-    """
     text = (text or "").replace("\r", "")
     out, start, n = [], 0, len(text)
     while start < n:
@@ -77,28 +89,21 @@ def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
         start = max(0, end - overlap)
     return out
 
-
-def already_indexed_version(doc_id: str, etag: str) -> bool:
-    """
-    Quick filter check to avoid double-indexing the same version.
-    """
-    try:
-        zero = [0.0] * EMBED_DIM
-        r = index.query(
-            vector=zero,
-            top_k=1,
-            filter={"doc_id": {"$eq": doc_id}, "doc_etag": {"$eq": etag}},
-        )
-        return len(r.get("matches", [])) > 0
-    except Exception:
-        # Fail-open: if filter/connection fails, let the ingest proceed
-        return False
-
-
 def vector_id(doc_id: str, etag: str, chunk_idx: int, chunk: str) -> str:
     h = hashlib.md5(chunk.encode("utf-8")).hexdigest()[:10]
     return f"{doc_id}::v:{etag[:8]}::c:{chunk_idx}::h:{h}"
 
+def already_indexed_version(index, doc_id: str, etag: str) -> bool:
+    """Fast 'did we already index this exact version?' check."""
+    try:
+        zero = [0.0] * EMBED_DIM
+        r = index.query(
+            vector=zero, top_k=1,
+            filter={"doc_id": {"$eq": doc_id}, "doc_etag": {"$eq": etag}},
+        )
+        return len(r.get("matches", [])) > 0
+    except Exception:
+        return False  # fail-open
 
 # =======================
 # ROOT / HEALTH
@@ -108,14 +113,12 @@ def root():
     return {
         "status": "VikramGPT Gateway is live 💥",
         "index": PINECONE_INDEX,
-        "endpoints": ["/healthz", "/ask"],
+        "endpoints": ["/healthz", "/ask", "/ingest/s3-object"],
     }
-
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
-
 
 # =======================
 # /ASK
@@ -128,10 +131,12 @@ def ask(req: AskRequest):
 
     # 1) Embed the query
     emb = oc.embeddings.create(
-        model="text-embedding-3-large", input=[query]
+        model="text-embedding-3-large",
+        input=[query]
     ).data[0].embedding
 
     # 2) Retrieve from Pinecone
+    index = get_index()
     results = index.query(vector=emb, top_k=TOP_K, include_metadata=True)
 
     # 3) Build context & citations
@@ -155,8 +160,8 @@ def ask(req: AskRequest):
     if not snippets:
         return AskResponse(
             answer=(
-                "The provided context does not contain any information about your query. "
-                "Please try rephrasing or upload relevant material to your S3 bucket."
+                "The provided context does not contain information for your query. "
+                "Please rephrase or upload relevant material to your S3 bucket."
             ),
             citations=citations,
         )
@@ -184,10 +189,7 @@ Question: {query}
     chat = oc.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": "You are a careful assistant that only uses provided context.",
-            },
+            {"role": "system", "content": "You are a careful assistant that only uses provided context."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,
@@ -195,7 +197,6 @@ Question: {query}
 
     answer = chat.choices[0].message.content.strip()
     return AskResponse(answer=answer, citations=citations)
-
 
 # =======================
 # EVENT-DRIVEN S3 INGEST (secured)
@@ -206,8 +207,8 @@ def ingest_single_s3_object(
     x_ingest_token: Annotated[Optional[str], Header(None, alias="X-INGEST-TOKEN")],
 ):
     """
-    Body:  {"bucket":"<bucket>", "key":"path/to/file.txt"}
-    Header: X-INGEST-TOKEN: <your secret>  (must match Render env var INGEST_TOKEN)
+    Body:   {"bucket":"<bucket>", "key":"path/to/file.txt"}
+    Header: X-INGEST-TOKEN: <your secret>  (must match INGEST_TOKEN env var)
     Supports .txt and .md for now.
     """
     if not INGEST_TOKEN or x_ingest_token != INGEST_TOKEN:
@@ -240,38 +241,36 @@ def ingest_single_s3_object(
     except Exception:
         text = body.decode("latin-1", errors="ignore")
 
-    # Skip if already indexed (same version)
-    if already_indexed_version(key, etag):
+    # Skip if same version already indexed
+    index = get_index()
+    if already_indexed_version(index, key, etag):
         return {"ingested": False, "reason": "already indexed", "key": key, "etag": etag}
 
-    # Chunk
+    # Chunk -> embed -> upsert
     chunks = chunk_text(text)
     if not chunks:
         return {"ingested": False, "reason": "no text", "key": key}
 
-    # Embed + upsert in small batches
     BATCH = 64
     pending = []
     for i in range(0, len(chunks), BATCH):
-        batch = chunks[i : i + BATCH]
+        batch = chunks[i:i + BATCH]
         r = oc.embeddings.create(model="text-embedding-3-large", input=batch)
         embs = [d.embedding for d in r.data]
 
         for j, (chunk, vec) in enumerate(zip(batch, embs), start=i):
             vid = vector_id(key, etag, j, chunk)
-            pending.append(
-                {
-                    "id": vid,
-                    "values": vec,
-                    "metadata": {
-                        "doc_id": key,
-                        "doc_etag": etag,
-                        "chunk_index": j,
-                        "source": f"s3://{bucket}/{key}",
-                        "text": chunk,
-                    },
+            pending.append({
+                "id": vid,
+                "values": vec,
+                "metadata": {
+                    "doc_id": key,
+                    "doc_etag": etag,
+                    "chunk_index": j,
+                    "source": f"s3://{bucket}/{key}",
+                    "text": chunk,
                 }
-            )
+            })
 
         index.upsert(vectors=pending)
         pending = []
