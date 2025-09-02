@@ -1,65 +1,69 @@
 import os
 import boto3
-import tempfile
-from tqdm import tqdm
+import pinecone
+from dotenv import load_dotenv
 from openai import OpenAI
-from pinecone import Pinecone
 
-# Load environment variables
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# Load env vars
+load_dotenv()
+
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt")
-AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-2")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Initialize clients
-s3 = boto3.client("s3",
-                  aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-                  aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                  region_name=AWS_REGION)
-
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)
+# Init clients
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
+pinecone.init(api_key=PINECONE_API_KEY)
+index = pinecone.Index(PINECONE_INDEX)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-def embed_text(text: str):
-    """Generate embeddings with OpenAI"""
-    response = client.embeddings.create(
-        input=text,
-        model="text-embedding-3-large"
-    )
-    return response.data[0].embedding
+def file_already_indexed(file_key: str) -> bool:
+    """Check Pinecone if file is already indexed by file_key metadata."""
+    query = index.query(vector=[0.0]*1536, top_k=1, include_metadata=True, filter={"file_key": file_key})
+    return len(query.matches) > 0
 
-def process_file(file_path, s3_key):
-    """Read file and create embeddings"""
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            text = f.read()
+def embed_and_upsert(file_key: str, content: str):
+    """Embed file content and upsert into Pinecone."""
+    embedding = client.embeddings.create(model="text-embedding-3-small", input=content)
+    vector = embedding.data[0].embedding
 
-        embedding = embed_text(text)
+    index.upsert([
+        {
+            "id": file_key,
+            "values": vector,
+            "metadata": {"file_key": file_key, "text": content[:500]}
+        }
+    ])
 
-        index.upsert([
-            {
-                "id": s3_key,
-                "values": embedding,
-                "metadata": {"source": s3_key}
-            }
-        ])
-        print(f"✅ Ingested {s3_key}")
-    except Exception as e:
-        print(f"❌ Failed {s3_key}: {e}")
+def process_s3_files():
+    """Ingest new/modified files from S3 into Pinecone."""
+    response = s3.list_objects_v2(Bucket=AWS_BUCKET_NAME)
 
-def ingest_bucket():
-    """Go through S3 bucket and ingest new/updated files"""
-    objects = s3.list_objects_v2(Bucket=AWS_BUCKET_NAME).get("Contents", [])
+    if "Contents" not in response:
+        print("No files in S3 bucket.")
+        return
 
-    for obj in tqdm(objects, desc="Ingesting S3 files"):
-        s3_key = obj["Key"]
+    for obj in response["Contents"]:
+        file_key = obj["Key"]
 
-        # Temporary download
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            s3.download_file(Bucket=AWS_BUCKET_NAME, Key=s3_key, Filename=tmp.name)
-            process_file(tmp.name, s3_key)
+        if file_already_indexed(file_key):
+            print(f"Skipping {file_key} (already indexed)")
+            continue
+
+        # Download file
+        s3_object = s3.get_object(Bucket=AWS_BUCKET_NAME, Key=file_key)
+        content = s3_object["Body"].read().decode("utf-8")
+
+        print(f"Ingesting {file_key}...")
+        embed_and_upsert(file_key, content)
 
 if __name__ == "__main__":
-    ingest_bucket()
+    process_s3_files()
+    print("Ingestion completed ✅")
