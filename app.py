@@ -1,35 +1,45 @@
 import os
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Pinecone v3 client (package is "pinecone-client")
-from pinecone import Pinecone
-# OpenAI 1.x client
 from openai import OpenAI
+from pinecone import Pinecone, ServerlessSpec
 
-# ---------- env ----------
+# ---------- Env & clients ----------
 load_dotenv()
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt")
 TOP_K = int(os.getenv("TOP_K", "8"))
 
-if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY environment variables.")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY is not set")
+if not PINECONE_API_KEY:
+    raise RuntimeError("PINECONE_API_KEY is not set")
 
-# ---------- clients ----------
+app = FastAPI(title="VikramGPT Gateway", version="1.0")
+
 oc = OpenAI(api_key=OPENAI_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
+
+# Create serverless index if missing (safe no-op if it exists already)
+def ensure_index(name: str):
+    existing = {i["name"] for i in pc.list_indexes()}
+    if name not in existing:
+        pc.create_index(
+            name=name,
+            dimension=1536,  # text-embedding-3-small
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-west-2"),
+        )
+ensure_index(PINECONE_INDEX)
 index = pc.Index(PINECONE_INDEX)
 
-# ---------- models ----------
-class AskRequest(BaseModel):
-    query: str
-    mode: Optional[str] = "concise"
-
+# ---------- Models ----------
 class Cit(BaseModel):
     doc_id: Optional[str] = None
     title: Optional[str] = None
@@ -37,116 +47,107 @@ class Cit(BaseModel):
     page: Optional[int] = None
     score: Optional[float] = None
 
+class AskRequest(BaseModel):
+    query: str
+    mode: Optional[str] = "concise"
+
 class AskResponse(BaseModel):
     answer: str
-    citations: List[Cit]
+    citations: List[Cit] = []
 
-# ---------- app ----------
-app = FastAPI(title="VikramGPT Gateway", version="1.0")
+# ---------- Helpers ----------
+EMBED_MODEL = "text-embedding-3-small"
 
+def embed(text: str) -> List[float]:
+    """
+    Create an embedding with the OpenAI SDK and return the vector.
+    Raises a ValueError if anything looks off.
+    """
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Empty query")
+
+    resp = oc.embeddings.create(model=EMBED_MODEL, input=text)
+    vec = resp.data[0].embedding if resp and resp.data else None
+    if not vec or not isinstance(vec, list) or len(vec) == 0:
+        raise ValueError("Failed to create embedding vector")
+    return vec
+
+def build_answer(query: str, contexts: List[dict], mode: str) -> str:
+    """
+    Very simple answer composer; swap with an LLM call if you want.
+    """
+    if not contexts:
+        return (
+            "I couldn’t find anything relevant in your private index for that question. "
+            "If you add more docs or provide more detail, I’ll try again."
+        )
+    bullets = []
+    for m in contexts[:3]:
+        md = m.get("metadata", {}) or {}
+        title = md.get("title") or md.get("doc_id") or "Untitled"
+        bullets.append(f"- {title} (score: {m.get('score'):.3f})")
+    prefix = "Here’s a concise answer based on your private docs:\n" if mode == "concise" else "Here’s what I found:\n"
+    return prefix + "\n".join(bullets)
+
+# ---------- Routes ----------
 @app.get("/")
 def root():
-    return {
-        "status": "VikramGPT Gateway is live 💥",
-        "index": PINECONE_INDEX,
-        "endpoints": ["/healthz", "/ask"]
-    }
+    return {"status": "VikramGPT Gateway is live 💥", "index": PINECONE_INDEX, "endpoints": ["/healthz", "/ask"]}
 
 @app.get("/healthz")
 def healthz():
     try:
-        _ = index.describe_index_stats()
+        _ = pc.list_indexes()
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 @app.post("/ask", response_model=AskResponse)
-def ask(
-    body: AskRequest,
-    # NOTE: Header default must be set with '=' when using FastAPI; alias maps header name
-    x_ingest_token: Optional[str] = Header(default=None, alias="x-ingest-token"),
-):
-    """
-    Simple RAG: query Pinecone -> build context -> ask OpenAI.
-    'x-ingest-token' reserved for future ACL hooks; not used yet.
-    """
-    query = (body.query or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="query is required")
+def ask(body: AskRequest):
+    # 1) Make an embedding for the user query
+    try:
+        vec = embed(body.query)
+    except Exception as e:
+        return AskResponse(
+            answer=f"Embedding failed: {e}. Please try a different query.",
+            citations=[]
+        )
 
-    # 1) retrieve from Pinecone
-    # Pinecone v3 typically expects a vector; some deployments expose text search.
-    # We'll try text first; if the SDK complains, you can switch to vector search
-    # by embedding 'query' with your embed model.
+    # 2) Query Pinecone with that vector
     try:
         res = index.query(
+            vector=vec,
             top_k=TOP_K,
             include_metadata=True,
-            text=query,  # works in Pinecone text-enabled indexes; harmless to try first
-        )
-    except TypeError:
-        # fallback (for SDKs that do not accept 'text' kw): just raise a helpful error
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "This Pinecone index/API does not support text queries. "
-                "Use vector search: create an embedding for the query and call index.query(vector=[...])."
-            ),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pinecone query failed: {e}")
-
-    citations: List[Cit] = []
-    context_chunks: List[str] = []
-
-    matches = getattr(res, "matches", []) or getattr(res, "data", [])
-    for m in matches or []:
-        md = getattr(m, "metadata", {}) or {}
-        score = getattr(m, "score", None)
-        doc_id = md.get("doc_id") or md.get("id") or None
-        title = md.get("title")
-        s3_path = md.get("s3_path")
-        page = md.get("page")
-        text = md.get("text") or md.get("chunk") or ""
-        if text:
-            context_chunks.append(text)
-        citations.append(Cit(doc_id=doc_id, title=title, s3_path=s3_path, page=page, score=score))
-
-    if not context_chunks:
+        # This is the error you saw earlier; surfacing it cleanly helps
         return AskResponse(
-            answer=(
-                "The provided context does not contain relevant information for your query. "
-                "Please refine the question or ingest more documents."
-            ),
-            citations=citations
+            answer=f"Pinecone query failed: {e}",
+            citations=[]
         )
 
-    # 2) build prompt
-    context = "\n\n---\n\n".join(context_chunks[:TOP_K])
-    system = (
-        "You are VikramGPT, a precise assistant. Answer only from the provided context. "
-        "If the answer is not in the context, say you don’t know."
-    )
-    user = f"Question: {query}\n\nContext:\n{context}\n\nAnswer:"
-
-    # 3) generate
-    try:
-        completion = oc.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.2,
-            max_tokens=400,
+    matches = res.get("matches", []) if isinstance(res, dict) else getattr(res, "matches", [])
+    # 3) Build citations
+    citations: List[Cit] = []
+    for m in matches:
+        md = m.get("metadata", {}) if isinstance(m, dict) else getattr(m, "metadata", {}) or {}
+        citations.append(
+            Cit(
+                doc_id=md.get("doc_id"),
+                title=md.get("title"),
+                s3_path=md.get("s3_path"),
+                page=md.get("page"),
+                score=float(m.get("score")) if isinstance(m, dict) else float(getattr(m, "score", 0.0)),
+            )
         )
-        answer = completion.choices[0].message.content.strip()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI call failed: {e}")
 
+    # 4) Compose an answer (replace with an LLM call if you want richer responses)
+    answer = build_answer(body.query, matches, body.mode or "concise")
     return AskResponse(answer=answer, citations=citations)
 
-# For local debugging
+# ---------- Uvicorn entry ----------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run("app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
