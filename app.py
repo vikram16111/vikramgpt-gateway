@@ -1,6 +1,6 @@
 import os
 import hashlib
-from typing import Optional, List
+from typing import Optional, List, Annotated
 
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
@@ -54,9 +54,6 @@ class AskResponse(BaseModel):
 
 # ---------- HELPERS ----------
 def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
-    """
-    Simple context-preserving chunker for long text.
-    """
     text = (text or "").replace("\r", "")
     out, start, n = [], 0, len(text)
     while start < n:
@@ -68,7 +65,6 @@ def chunk_text(text: str, size: int = 1800, overlap: int = 200) -> List[str]:
     return out
 
 def already_indexed_version(doc_id: str, etag: str) -> bool:
-    """Quick filter check to avoid double indexing same version."""
     try:
         zero = [0.0] * EMBED_DIM
         r = index.query(
@@ -99,13 +95,9 @@ def ask(req: AskRequest):
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
 
-    # 1) Embed the query
     emb = oc.embeddings.create(model="text-embedding-3-large", input=[query]).data[0].embedding
-
-    # 2) Retrieve from Pinecone
     results = index.query(vector=emb, top_k=TOP_K, include_metadata=True)
 
-    # 3) Build context & citations
     snippets = []
     citations: List[Cite] = []
     for m in results.get("matches", []):
@@ -134,7 +126,6 @@ def ask(req: AskRequest):
 
     context = "\n\n---\n\n".join(snippets[: TOP_K])
 
-    # 4) Ask the LLM
     model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
     style = "Keep it concise and cite specific sources if helpful." if req.mode == "concise" else \
             "Be thorough and structured. Cite sources."
@@ -163,7 +154,10 @@ Question: {query}
 
 # ---------- EVENT-DRIVEN S3 INGEST (secured) ----------
 @app.post("/ingest/s3-object")
-def ingest_single_s3_object(payload: dict, x_ingest_token: str = Header(None)):
+def ingest_single_s3_object(
+    payload: dict,
+    x_ingest_token: Annotated[Optional[str], Header(alias="X-INGEST-TOKEN")] = None,
+):
     """
     Body: {"bucket":"<bucket>", "key":"path/to/file.txt"}
     Header: X-INGEST-TOKEN: <your secret>
@@ -180,7 +174,6 @@ def ingest_single_s3_object(payload: dict, x_ingest_token: str = Header(None)):
     if not key.lower().endswith((".txt", ".md")):
         return {"ingested": False, "reason": "unsupported extension", "key": key}
 
-    # Read object from S3
     import boto3
     from botocore.client import Config
 
@@ -199,23 +192,19 @@ def ingest_single_s3_object(payload: dict, x_ingest_token: str = Header(None)):
     except Exception:
         text = body.decode("latin-1", errors="ignore")
 
-    # Skip if already indexed (same version)
     if already_indexed_version(key, etag):
         return {"ingested": False, "reason": "already indexed", "key": key, "etag": etag}
 
-    # Chunk
     chunks = chunk_text(text)
     if not chunks:
         return {"ingested": False, "reason": "no text", "key": key}
 
-    # Embed + upsert in batches
     BATCH = 64
     pending = []
     for i in range(0, len(chunks), BATCH):
         batch = chunks[i:i + BATCH]
         r = oc.embeddings.create(model="text-embedding-3-large", input=batch)
         embs = [d.embedding for d in r.data]
-
         for j, (chunk, vec) in enumerate(zip(batch, embs), start=i):
             vid = vector_id(key, etag, j, chunk)
             pending.append({
@@ -229,7 +218,6 @@ def ingest_single_s3_object(payload: dict, x_ingest_token: str = Header(None)):
                     "text": chunk,
                 }
             })
-
         index.upsert(vectors=pending)
         pending = []
 
