@@ -1,72 +1,69 @@
 # ingest_s3.py
-# Ingests documents from S3 into Pinecone using OpenAI text-embedding-3-small (1536-dim).
-# - Skips unchanged content (deterministic IDs include the S3 ETag)
-# - Skips already-indexed chunks via Pinecone fetch()
-# - Shows progress with tqdm
-# Supported types: .pdf, .txt, .md (optionally .docx if python-docx is available)
+# S3 -> (approved-only) -> chunk -> embed (text-embedding-3-small, 1536) -> Pinecone
+# - Skips files not explicitly approved via S3 object tags (approved=yes by default)
+# - Skips already-indexed chunks (deterministic IDs with ETag)
+# - Supports PDF/TXT/MD (DOCX optional)
+# - Progress via tqdm
 
 import os
 import io
 import hashlib
 import logging
-from typing import List, Dict, Iterable, Optional, Tuple
+from typing import List, Dict, Iterable, Tuple
 
 from dotenv import load_dotenv
 import boto3
 from tqdm import tqdm
-
-# PDF
 from pypdf import PdfReader
 
-# OpenAI (>=1.0 style client)
 from openai import OpenAI
-
-# Pinecone (new SDK)
 from pinecone import Pinecone, ServerlessSpec
 
-# --------------------------
-# Config & constants
-# --------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Config
+# ──────────────────────────────────────────────────────────────────────────────
 load_dotenv()
 
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")  # REQUIRED
+AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")    # REQUIRED
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-EMBED_DIM = 1536  # text-embedding-3-small outputs 1536-d vectors
+EMBED_DIM = 1536  # text-embedding-3-small
 
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")  # REQUIRED
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt-1536")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 PINECONE_NAMESPACE = os.getenv("PINECONE_NAMESPACE", "")  # optional
 
+# APPROVAL GATE (S3 object tags)
+APPROVAL_TAG_KEY = os.getenv("APPROVAL_TAG_KEY", "approved")
+REQUIRED_APPROVAL_VALUE = os.getenv("REQUIRED_APPROVAL_VALUE", "yes").lower()
+
 # Chunking
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2000"))     # ~chars per chunk
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2000"))      # chars per chunk
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200")) # overlap
 
 # Batching
 EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "96"))
 UPSERT_BATCH_SIZE = int(os.getenv("UPSERT_BATCH_SIZE", "100"))
 
-# Allowed file types
 ALLOWED_EXTS = {".pdf", ".txt", ".md", ".markdown", ".docx"}
 
-# Logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
-logger = logging.getLogger("ingest")
+log = logging.getLogger("ingest")
 
 
-# --------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# --------------------------
-def file_extension(key: str) -> str:
-    key_low = key.lower()
+# ──────────────────────────────────────────────────────────────────────────────
+def file_ext(key: str) -> str:
+    key = key.lower()
     for ext in ALLOWED_EXTS:
-        if key_low.endswith(ext):
+        if key.endswith(ext):
             return ext
     return ""
 
@@ -75,85 +72,83 @@ def sha1(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    """
-    Simple character-based chunker, overlap at boundaries.
-    Keeps it robust & dependency-light.
-    """
-    text = text.strip()
+def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    text = (text or "").strip()
     if not text:
         return []
-
-    chunks: List[str] = []
-    start = 0
+    out: List[str] = []
     n = len(text)
+    start = 0
     while start < n:
-        end = min(start + chunk_size, n)
+        end = min(start + size, n)
         chunk = text[start:end].strip()
         if chunk:
-            chunks.append(chunk)
+            out.append(chunk)
         if end == n:
             break
-        start = end - overlap if end - overlap > start else end
-    return chunks
+        start = max(end - overlap, start + 1)
+    return out
 
 
 def read_pdf_bytes_to_text(pdf_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(pdf_bytes))
-    parts = []
+    parts: List[str] = []
     for page in reader.pages:
         try:
             parts.append(page.extract_text() or "")
         except Exception:
-            # If any page fails, continue
             continue
     return "\n".join(parts)
 
 
-def read_s3_object_to_text(s3_client, bucket: str, key: str) -> str:
-    obj = s3_client.get_object(Bucket=bucket, Key=key)
+def read_s3_object_to_text(s3, bucket: str, key: str) -> str:
+    obj = s3.get_object(Bucket=bucket, Key=key)
     body = obj["Body"].read()
-    ext = file_extension(key)
-
+    ext = file_ext(key)
     if ext == ".pdf":
         return read_pdf_bytes_to_text(body)
-    elif ext in {".txt", ".md", ".markdown"}:
-        # let decoding errors pass-through
+    if ext in {".txt", ".md", ".markdown"}:
         return body.decode("utf-8", errors="ignore")
-    elif ext == ".docx":
-        # Optional: only if python-docx is available
+    if ext == ".docx":
         try:
-            import docx  # type: ignore
+            import docx  # optional
             doc = docx.Document(io.BytesIO(body))
-            return "\n".join([p.text for p in doc.paragraphs])
+            return "\n".join(p.text for p in doc.paragraphs)
         except Exception:
-            logger.warning(f"python-docx not installed or failed to parse: {key}")
+            log.warning(f"DOCX parse failed or python-docx missing: {key}")
             return ""
-    else:
-        return ""
+    return ""
+
+
+def get_object_tags(s3, bucket: str, key: str) -> dict:
+    try:
+        resp = s3.get_object_tagging(Bucket=bucket, Key=key)
+        return {t["Key"]: t["Value"] for t in resp.get("TagSet", [])}
+    except Exception:
+        return {}
 
 
 def ensure_index(pc: Pinecone, name: str, dim: int, cloud: str, region: str) -> None:
-    names = [idx["name"] for idx in pc.list_indexes()]
+    names = [i["name"] for i in pc.list_indexes()]
     if name not in names:
-        logger.info(f"Creating Pinecone index '{name}' (dim={dim})...")
+        log.info(f"Creating Pinecone index '{name}' (dim={dim}, metric=cosine)...")
         pc.create_index(
             name=name,
             dimension=dim,
             metric="cosine",
-            spec=ServerlessSpec(cloud=cloud, region=region)
+            spec=ServerlessSpec(cloud=cloud, region=region),
         )
-        # Wait for it to be ready
+        # Wait until ready
         while True:
-            status = pc.describe_index(name).status["ready"]
-            if status:
+            meta = pc.describe_index(name)
+            if meta.status.get("ready"):
                 break
 
 
-def batched(iterable: Iterable, batch_size: int) -> Iterable[List]:
+def batched(iterable, batch_size: int):
     batch = []
-    for item in iterable:
-        batch.append(item)
+    for x in iterable:
+        batch.append(x)
         if len(batch) >= batch_size:
             yield batch
             batch = []
@@ -161,176 +156,166 @@ def batched(iterable: Iterable, batch_size: int) -> Iterable[List]:
         yield batch
 
 
-# --------------------------
-# Core ingestion
-# --------------------------
 def fetch_existing_ids(index, ids: List[str], namespace: str) -> set:
-    """
-    Fetch a set of ids that already exist in Pinecone (to skip duplicates).
-    """
     existing = set()
     for batch in batched(ids, 1000):
         res = index.fetch(ids=batch, namespace=namespace)
-        # res is a dict-like: {'vectors': {'id': {...}}}
         vectors = res.get("vectors", {}) if isinstance(res, dict) else res.vectors
         existing.update(vectors.keys())
     return existing
 
 
-def embed_texts(client: OpenAI, texts: List[str]) -> List[List[float]]:
-    """
-    Embed texts (batch) using OpenAI embeddings.
-    """
-    resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
-    # Respect output ordering
+def embed_texts(oai: OpenAI, texts: List[str]) -> List[List[float]]:
+    resp = oai.embeddings.create(model=EMBED_MODEL, input=texts)
     return [d.embedding for d in resp.data]
 
 
-def upsert_vectors(index, vectors: List[Dict], namespace: str) -> None:
+def upsert_vectors(index, vectors: List[Dict], namespace: str):
     for batch in batched(vectors, UPSERT_BATCH_SIZE):
         index.upsert(vectors=batch, namespace=namespace)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Ingest
+# ──────────────────────────────────────────────────────────────────────────────
 def ingest_bucket():
-    # ---------- sanity checks
-    missing = [name for name, val in [
+    # Sanity
+    missing = [k for k, v in [
+        ("AWS_ACCESS_KEY_ID", AWS_ACCESS_KEY_ID),
+        ("AWS_SECRET_ACCESS_KEY", AWS_SECRET_ACCESS_KEY),
         ("AWS_BUCKET_NAME", AWS_BUCKET_NAME),
         ("OPENAI_API_KEY", OPENAI_API_KEY),
         ("PINECONE_API_KEY", PINECONE_API_KEY),
-    ] if not val]
+    ] if not v]
     if missing:
-        raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
+        raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
 
-    # ---------- clients
+    # Clients
     s3 = boto3.client(
         "s3",
         region_name=AWS_REGION,
         aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     )
+    oai = OpenAI(api_key=OPENAI_API_KEY)
     pc = Pinecone(api_key=PINECONE_API_KEY)
     ensure_index(pc, PINECONE_INDEX, EMBED_DIM, PINECONE_CLOUD, PINECONE_REGION)
     index = pc.Index(PINECONE_INDEX)
 
-    oai = OpenAI(api_key=OPENAI_API_KEY)
-
-    # ---------- list objects (paginated)
-    logger.info(f"Listing objects in s3://{AWS_BUCKET_NAME} ...")
+    # List bucket keys
+    log.info(f"Listing objects in s3://{AWS_BUCKET_NAME} ...")
     paginator = s3.get_paginator("list_objects_v2")
-    page_iter = paginator.paginate(Bucket=AWS_BUCKET_NAME)
+    page_it = paginator.paginate(Bucket=AWS_BUCKET_NAME)
 
-    total_keys = 0
-    candidate_keys: List[Tuple[str, str]] = []  # (key, etag)
-
-    for page in page_iter:
-        contents = page.get("Contents", [])
-        for it in contents:
+    candidates: List[Tuple[str, str]] = []  # (key, etag)
+    for page in page_it:
+        for it in page.get("Contents", []):
             key = it["Key"]
-            ext = file_extension(key)
-            if not ext:
+            if key.endswith("/"):
+                continue
+            if not file_ext(key):
                 continue
             etag = (it.get("ETag") or "").strip('"')
-            candidate_keys.append((key, etag))
-            total_keys += 1
+            candidates.append((key, etag))
 
-    if not candidate_keys:
-        logger.info("No supported files found in the bucket.")
+    if not candidates:
+        log.info("No supported files found.")
         return
 
-    logger.info(f"Found {len(candidate_keys)} candidate files to process.")
-    processed_files = 0
-    skipped_files = 0
-    total_chunks = 0
-    skipped_chunks = 0
+    processed_files = skipped_files = 0
+    new_chunks = skipped_chunks = 0
 
-    with tqdm(total=len(candidate_keys), desc="Files", unit="file") as pbar_files:
-        for key, etag in candidate_keys:
+    with tqdm(total=len(candidates), desc="Files", unit="file") as pbar:
+        for key, etag in candidates:
+            # 1) Approval gate via S3 tags
+            tags = get_object_tags(s3, AWS_BUCKET_NAME, key)
+            approved = tags.get(APPROVAL_TAG_KEY, "").lower() == REQUIRED_APPROVAL_VALUE
+            if not approved:
+                tqdm.write(f"⏭️  Skipping (not approved) {key} tags={tags}")
+                skipped_files += 1
+                pbar.update(1)
+                continue
+
+            # 2) Read & chunk
             try:
-                # Read & chunk
                 text = read_s3_object_to_text(s3, AWS_BUCKET_NAME, key)
-                if not text.strip():
-                    skipped_files += 1
-                    pbar_files.update(1)
-                    continue
-
-                chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
-                if not chunks:
-                    skipped_files += 1
-                    pbar_files.update(1)
-                    continue
-
-                # Deterministic chunk IDs: hash(bucket/key:etag) + :chunkNo
-                base_id = sha1(f"{AWS_BUCKET_NAME}/{key}:{etag}")
-                chunk_ids = [f"{base_id}:{i}" for i in range(len(chunks))]
-
-                # Skip already indexed chunks
-                existing = fetch_existing_ids(index, chunk_ids, PINECONE_NAMESPACE)
-                to_embed = []
-                to_ids = []
-                for cid, ctext in zip(chunk_ids, chunks):
-                    if cid in existing:
-                        skipped_chunks += 1
-                        continue
-                    to_embed.append(ctext)
-                    to_ids.append(cid)
-
-                # Embed & upsert (only the new ones)
-                if to_embed:
-                    vectors: List[Dict] = []
-                    for batch_texts, batch_ids in tqdm(
-                        zip(batched(to_embed, EMBED_BATCH_SIZE), batched(to_ids, EMBED_BATCH_SIZE)),
-                        total=(len(to_embed) + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE,
-                        desc=f"Indexing {os.path.basename(key)}",
-                        leave=False,
-                        unit="batch"
-                    ):
-                        # Flatten batched() generator zips; unwrap
-                        bt = list(batch_texts)
-                        bi = list(batch_ids)
-                        if not bt:
-                            continue
-
-                        embs = embed_texts(oai, bt)
-                        for vid, vec, text_chunk in zip(bi, embs, bt):
-                            vectors.append({
-                                "id": vid,
-                                "values": vec,
-                                "metadata": {
-                                    "doc_id": key,
-                                    "s3_path": f"s3://{AWS_BUCKET_NAME}/{key}",
-                                    "etag": etag,
-                                    "chunk_chars": len(text_chunk),
-                                }
-                            })
-
-                        if len(vectors) >= UPSERT_BATCH_SIZE:
-                            upsert_vectors(index, vectors, PINECONE_NAMESPACE)
-                            vectors.clear()
-
-                    if vectors:
-                        upsert_vectors(index, vectors, PINECONE_NAMESPACE)
-
-                    total_chunks += len(to_embed)
-
-                processed_files += 1
-
             except Exception as e:
-                logger.exception(f"Failed to process {key}: {e}")
+                tqdm.write(f"❌ Read failed {key}: {e}")
+                skipped_files += 1
+                pbar.update(1)
+                continue
 
-            pbar_files.update(1)
+            chunks = chunk_text(text)
+            if not chunks:
+                tqdm.write(f"⚠️  No text extracted {key}")
+                skipped_files += 1
+                pbar.update(1)
+                continue
 
-    logger.info(
-        f"Done. Files processed: {processed_files}, skipped: {skipped_files}. "
-        f"New chunks upserted: {total_chunks}, duplicates skipped: {skipped_chunks}."
+            # 3) Deterministic IDs = sha1('bucket/key:etag') + ':i'
+            base = sha1(f"{AWS_BUCKET_NAME}/{key}:{etag}")
+            ids = [f"{base}:{i}" for i in range(len(chunks))]
+
+            # 4) Skip duplicates already in Pinecone
+            existing = fetch_existing_ids(index, ids, PINECONE_NAMESPACE)
+            to_embed, to_ids = [], []
+            for cid, ctext in zip(ids, chunks):
+                if cid in existing:
+                    skipped_chunks += 1
+                    continue
+                to_embed.append(ctext)
+                to_ids.append(cid)
+
+            if not to_embed:
+                processed_files += 1
+                pbar.update(1)
+                continue
+
+            # 5) Embed + upsert
+            vectors: List[Dict] = []
+            batches = (len(to_embed) + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
+            for bi in tqdm(range(batches), desc=f"Indexing {os.path.basename(key)}", leave=False, unit="batch"):
+                start = bi * EMBED_BATCH_SIZE
+                end = start + EMBED_BATCH_SIZE
+                batch_texts = to_embed[start:end]
+                batch_ids = to_ids[start:end]
+
+                embs = embed_texts(oai, batch_texts)
+                for vid, vec, txt in zip(batch_ids, embs, batch_texts):
+                    vectors.append({
+                        "id": vid,
+                        "values": vec,
+                        "metadata": {
+                            "doc_id": key,
+                            "s3_path": f"s3://{AWS_BUCKET_NAME}/{key}",
+                            "etag": etag,
+                            "chunk_chars": len(txt),
+                        }
+                    })
+                if len(vectors) >= UPSERT_BATCH_SIZE:
+                    upsert_vectors(index, vectors, PINECONE_NAMESPACE)
+                    vectors.clear()
+
+            if vectors:
+                upsert_vectors(index, vectors, PINECONE_NAMESPACE)
+
+            new_chunks += len(to_embed)
+            processed_files += 1
+            pbar.update(1)
+
+    log.info(
+        f"Done. Files processed: {processed_files}, skipped files: {skipped_files}, "
+        f"new chunks upserted: {new_chunks}, duplicate chunks skipped: {skipped_chunks}."
     )
 
 
-# --------------------------
-# Entrypoint
-# --------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    logger.info(
+    log.info(
         f"Starting ingest: bucket={AWS_BUCKET_NAME}, index={PINECONE_INDEX}, "
-        f"namespace='{PINECONE_NAMESPACE}', model={EMBED_MODEL} (dim={EMBED_DIM})"
+        f"namespace='{PINECONE_NAMESPACE}', model={EMBED_MODEL} (dim={EMBED_DIM}), "
+        f"approval_tag={APPROVAL_TAG_KEY}=={REQUIRED_APPROVAL_VALUE}"
     )
     ingest_bucket()
