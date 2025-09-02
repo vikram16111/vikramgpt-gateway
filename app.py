@@ -1,6 +1,6 @@
 import os
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from pinecone import Pinecone
@@ -12,21 +12,28 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt")
 TOP_K = int(os.getenv("TOP_K", "8"))
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # <— set this on Render
 
 if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY in environment")
+    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY")
 
 # ---------------------- Clients ----------------------
-app = FastAPI(title="VikramGPT Gateway", version="1.0")
+app = FastAPI(title="VikramGPT Gateway", version="1.1")
 oc = OpenAI(api_key=OPENAI_API_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)  # assumes index already exists and is populated
+index = pc.Index(PINECONE_INDEX)  # assumes exists
+
+# ---------------------- Security ----------------------
+def require_api_key(x_api_key: Optional[str] = Header(None)):
+    # if ADMIN_TOKEN is set, enforce it; if not set, allow (dev mode)
+    if ADMIN_TOKEN and x_api_key != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # ---------------------- Models ----------------------
 class AskRequest(BaseModel):
     query: str
-    mode: Optional[str] = "concise"          # "concise" | "executive" | "legal"
-    top_k: Optional[int] = None              # override default if desired
+    mode: Optional[str] = "concise"
+    top_k: Optional[int] = None
 
 class Cit(BaseModel):
     doc_id: str = ""
@@ -84,14 +91,17 @@ def to_citations(matches: List[dict]) -> List[Cit]:
 # ---------------------- Routes ----------------------
 @app.get("/")
 def root():
-    return {"status": "VikramGPT Gateway is live 🚀", "index": PINECONE_INDEX, "endpoints": ["/healthz", "/ask"]}
+    return {"status": "VikramGPT Gateway is live 💫", "index": PINECONE_INDEX, "endpoints": ["/healthz", "/ask"]}
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
-@app.post("/ask", response_model=AskResponse)
-def ask(req: AskRequest):
+@app.post("/ask", response_model=AskResponse, dependencies=[Depends(require_api_key)])
+def ask(
+    req: AskRequest,
+    x_user_id: Optional[str] = Header(None)  # used for ACL filtering
+):
     q = (req.query or "").strip()
     if not q:
         raise HTTPException(400, "Empty query")
@@ -100,8 +110,17 @@ def ask(req: AskRequest):
         qvec = embed(q)
         top_k = req.top_k or TOP_K
 
-        # Pinecone returns objects; normalize to dicts we can pass around
-        res = index.query(vector=qvec, top_k=top_k, include_metadata=True)
+        pc_filter = None
+        if x_user_id:
+            pc_filter = {"acl": {"$in": [x_user_id, "public"]}}
+
+        res = index.query(
+            vector=qvec,
+            top_k=top_k,
+            include_metadata=True,
+            filter=pc_filter
+        )
+
         matches = [
             {"id": m.id, "score": m.score, "metadata": (getattr(m, "metadata", {}) or {})}
             for m in (res.matches or [])
