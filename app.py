@@ -1,32 +1,35 @@
 import os
-from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import Optional, List
 from dotenv import load_dotenv
-from pinecone import Pinecone
 from openai import OpenAI
+import pinecone
 
-# --- Config & Clients ---------------------------------------------------------
+# Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX = os.getenv("PINECONE_INDEX", "vikramgpt")
-TOP_K_DEFAULT = int(os.getenv("TOP_K", "8"))
+TOP_K = int(os.getenv("TOP_K", "8"))
 
 if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    raise RuntimeError("Missing OPENAI_API_KEY or PINECONE_API_KEY")
+    raise RuntimeError("Set OPENAI_API_KEY and PINECONE_API_KEY in environment")
 
+# Initialize FastAPI
 app = FastAPI(title="VikramGPT Gateway", version="1.0")
 
+# OpenAI client
 oc = OpenAI(api_key=OPENAI_API_KEY)
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)  # assumes index already exists and is populated
 
-# --- Models -------------------------------------------------------------------
+# Pinecone client
+pinecone.init(api_key=PINECONE_API_KEY)
+index = pinecone.Index(PINECONE_INDEX)
+
+# Request/response models
 class AskRequest(BaseModel):
     query: str
-    mode: Optional[str] = "concise"  # concise|executive|legal
-    top_k: Optional[int] = None      # override default if you want
+    mode: Optional[str] = "concise"
 
 class Cit(BaseModel):
     doc_id: str = ""
@@ -37,97 +40,54 @@ class Cit(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
-    citations: List[Cit]
+    citations: List[Cit] = []
 
-# --- Helpers ------------------------------------------------------------------
-SYSTEM = "You are VikramGPT. Use ONLY the provided context. Cite like [1], [2]."
-
-def embed(text: str) -> List[float]:
-    e = oc.embeddings.create(model="text-embedding-3-large", input=text)
-    return e.data[0].embedding
-
-def style_for(mode: str) -> str:
-    return {
-        "concise": "Answer in 5–10 sentences.",
-        "executive": "Bullet points for an executive.",
-        "legal": "Quote exact lines; be neutral and precise."
-    }.get(mode or "concise", "Answer in 5–10 sentences.")
-
-def build_prompt(q: str, matches: List[dict], mode: str) -> str:
-    ctx_lines = []
-    for i, m in enumerate(matches, start=1):
-        md = m.get("metadata", {}) or {}
-        snippet = (md.get("text", "") or "")[:2000]
-        ref = f'[{i}] {md.get("title","")} {md.get("s3_path","")} p.{md.get("page","")}'
-        ctx_lines.append(ref + "\n" + snippet)
-    return f"""{SYSTEM}
-
-# Query
-{q}
-
-# Style
-{style_for(mode)}
-
-# Context (ranked)
-{chr(10).join(ctx_lines)}
-
-Answer now with references like [1], [2].
-"""
-
-def to_citations(matches: List[dict]) -> List[Cit]:
-    out: List[Cit] = []
-    for m in matches[:5]:
-        md = m.get("metadata", {}) or {}
-        out.append(Cit(
-            doc_id=md.get("doc_id", ""),
-            title=md.get("title"),
-            s3_path=md.get("s3_path"),
-            page=md.get("page"),
-            score=m.get("score"),
-        ))
-    return out
-
-# --- Routes -------------------------------------------------------------------
+# Root endpoint
 @app.get("/")
-def root():
-    return {
-        "status": "VikramGPT Gateway is live 🚀",
-        "index": PINECONE_INDEX,
-        "endpoints": ["/healthz", "/ask"]
-    }
+async def root():
+    return {"message": "VikramGPT Gateway is live 🚀"}
 
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
+# Ask endpoint
 @app.post("/ask", response_model=AskResponse)
-def ask(req: AskRequest):
-    q = (req.query or "").strip()
-    if not q:
-        raise HTTPException(status_code=400, detail="Empty query")
-
+async def ask(req: AskRequest):
     try:
-        qvec = embed(q)
-        top_k = req.top_k or TOP_K_DEFAULT
-        res = index.query(vector=qvec, top_k=top_k, include_metadata=True)
-
-        # Normalize matches (Pinecone SDK returns objects with attributes)
-        matches = [{"score": m.score, "metadata": (getattr(m, "metadata", {}) or {})}
-                   for m in res.matches or []]
-
-        if not matches:
-            return AskResponse(answer="No relevant context found.", citations=[])
-
-        prompt = build_prompt(q, matches, req.mode or "concise")
-        chat = oc.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role": "system", "content": SYSTEM},
-                      {"role": "user", "content": prompt}],
-            temperature=0.2
+        # Step 1: Embed query
+        emb = oc.embeddings.create(
+            model="text-embedding-3-small",
+            input=req.query
         )
-        answer = chat.choices[0].message.content.strip()
-        return AskResponse(answer=answer, citations=to_citations(matches))
+        query_emb = emb.data[0].embedding
+
+        # Step 2: Query Pinecone
+        res = index.query(vector=query_emb, top_k=TOP_K, include_metadata=True)
+
+        # Step 3: Build context
+        context = []
+        citations = []
+        for m in res["matches"]:
+            meta = m["metadata"]
+            text = meta.get("text", "")
+            context.append(text)
+            citations.append(Cit(
+                doc_id=m["id"],
+                title=meta.get("title"),
+                s3_path=meta.get("s3_path"),
+                page=meta.get("page"),
+                score=m["score"]
+            ))
+        context_str = "\n\n".join(context)
+
+        # Step 4: Ask OpenAI
+        completion = oc.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": f"You are a helpful assistant. Mode={req.mode}"},
+                {"role": "user", "content": f"Answer based on the following context:\n\n{context_str}\n\nQuestion: {req.query}"}
+            ]
+        )
+
+        answer = completion.choices[0].message.content.strip()
+        return AskResponse(answer=answer, citations=citations)
 
     except Exception as e:
-        # Surface a readable error to client while keeping 500 status
-        raise HTTPException(status_code=500, detail=f"Query failed: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
