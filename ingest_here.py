@@ -1,21 +1,23 @@
-﻿import os, sys, boto3
+﻿import os, sys, boto3, hashlib
 from dotenv import load_dotenv
 import pinecone, openai
-from ingest import ingest_file
 
-# Load env
 load_dotenv()
 
-# AWS + S3
+# AWS Clients
 s3 = boto3.client("s3", region_name="us-east-2")
+textract = boto3.client("textract", region_name="us-east-2")
 bucket = os.getenv("AWS_BUCKET", "vikramgpt-memory-vault")
 
 # Pinecone + OpenAI setup
 pinecone.init(api_key=os.getenv("PINECONE_API_KEY"), environment="us-east-1-gcp")
-index = pinecone.Index("vikramgpt-empire")
+index_name = "vikramgpt-1536"
+if index_name not in pinecone.list_indexes():
+    pinecone.create_index(index_name, dimension=1536, metric="cosine")
+index = pinecone.Index(index_name)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# File ingestion
+# File ingestion (PDF, Images with OCR, Text)
 def upload_and_ingest_file(local_path, namespace="docs"):
     if not os.path.exists(local_path):
         raise FileNotFoundError(f"[ERROR] File not found: {local_path}")
@@ -23,73 +25,61 @@ def upload_and_ingest_file(local_path, namespace="docs"):
     key = os.path.basename(local_path)
     s3.upload_file(local_path, bucket, key)
     print(f"[OK] Uploaded {local_path} to s3://{bucket}/{key}")
-    ingest_file(bucket, key, namespace=namespace)
-    print(f"[OK] Ingested {local_path} into Pinecone under namespace '{namespace}'")
-    return f"File {key} ingested."
+
+    text_chunks = []
+
+    if local_path.lower().endswith(".pdf"):
+        # Use simple text extractor for PDF
+        from PyPDF2 import PdfReader
+        reader = PdfReader(local_path)
+        for page in reader.pages:
+            text_chunks.append(page.extract_text())
+
+    elif local_path.lower().endswith((".png", ".jpg", ".jpeg")):
+        # OCR via Textract
+        response = textract.analyze_document(
+            Document={'S3Object': {'Bucket': bucket, 'Name': key}},
+            FeatureTypes=["TABLES", "FORMS"]
+        )
+        extracted_text = " ".join([item["Text"] for block in response["Blocks"] if block["BlockType"] == "LINE" for item in [block]])
+        text_chunks.append(extracted_text)
+
+    else:
+        with open(local_path, "r", encoding="utf-8") as f:
+            text_chunks.append(f.read())
+
+    for text in text_chunks:
+        if text.strip():
+            emb = openai.Embedding.create(input=text, model="text-embedding-3-small")["data"][0]["embedding"]
+            index.upsert(vectors=[{"id": str(hash(text)), "values": emb, "metadata": {"text": text}}],
+                         namespace=namespace)
+    print(f"[OK] Ingested {local_path} into Pinecone index under namespace '{namespace}'")
+    return True
 
 # Chat ingestion
 def ingest_chat(message, namespace="chats"):
     emb = openai.Embedding.create(input=message, model="text-embedding-3-small")["data"][0]["embedding"]
-    index.upsert(vectors=[{"id": str(hash(message)), "values": emb, "metadata": {"text": message}}], namespace=namespace)
+    index.upsert(vectors=[{"id": str(hash(message)), "values": emb, "metadata": {"text": message}}],
+                 namespace=namespace)
     print(f"[OK] Chat stored in namespace '{namespace}': {message[:80]}...")
-    return f"Chat message ingested: {message[:60]}..."
+    return True
 
-# Unified query
-def query_memory(query, top_k=5):
-    emb = openai.Embedding.create(input=query, model="text-embedding-3-small")["data"][0]["embedding"]
-    results_docs = index.query(vector=emb, top_k=top_k, include_metadata=True, namespace="docs")
-    results_chats = index.query(vector=emb, top_k=top_k, include_metadata=True, namespace="chats")
-
-    merged = []
-    for r in results_docs["matches"] + results_chats["matches"]:
-        merged.append(r["metadata"]["text"])
-
-    context = "\n\n".join(merged[:top_k])
-    completion = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are VikramGPT Empire, world-class assistant."},
-            {"role": "user", "content": f"Answer using context:\n\n{context}\n\nQuestion: {query}"}
-        ],
-        temperature=0.4
-    )
-    return completion["choices"][0]["message"]["content"]
-
-# Entry point
+# Entrypoint
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage:")
-        print("  python ingest_here.py <local_file_path> --mode file --ask \"Your follow-up question\"")
-        print("  python ingest_here.py \"Your chat text\" --mode chat --ask \"Your follow-up question\"")
+        print("Usage: python ingest_here.py <mode:file|chat> <input> [--namespace myspace]")
         sys.exit(1)
 
-    mode = "file"
-    ask_query = None
-    args = sys.argv[1:]
-
-    if "--mode" in args:
-        midx = args.index("--mode")
-        mode = args[midx + 1].lower()
-        args.pop(midx); args.pop(midx)
-
-    if "--ask" in args:
-        qidx = args.index("--ask")
-        ask_query = args[qidx + 1]
-        args.pop(qidx); args.pop(qidx)
+    mode = sys.argv[1].lower()
+    arg = sys.argv[2]
+    namespace = "docs" if mode == "file" else "chats"
+    if "--namespace" in sys.argv:
+        ns_idx = sys.argv.index("--namespace")
+        namespace = sys.argv[ns_idx + 1]
 
     if mode == "file":
-        file_path = args[0]
-        status = upload_and_ingest_file(file_path)
+        upload_and_ingest_file(arg, namespace=namespace)
     elif mode == "chat":
-        chat_text = args[0]
-        status = ingest_chat(chat_text)
+        ingest_chat(arg, namespace=namespace)
     else:
-        print("[ERROR] Unknown mode. Use 'file' or 'chat'.")
-        sys.exit(1)
-
-    print(f"\n✅ Ingestion complete: {status}")
-
-    if ask_query:
-        print(f"\n🔎 Running follow-up query: {ask_query}")
-        answer = query_memory(ask_query)
-        print("\n[Empire Answer]:\n", answer)
+        print(f"[ERROR] Unknown mode: {mode}. Use 'file' or 'chat'.")
