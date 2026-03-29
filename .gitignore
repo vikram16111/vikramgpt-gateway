@@ -1,0 +1,81 @@
+# Empire .gitignore (Cursor)
+#
+# Goal: prevent accidental commits of secrets, logs, temp artifacts, and large binaries.
+
+# --- Secrets / exports (never commit) ---
+Empire_RAG_Secrets_v1_*.txt
+# OC persistent browser profiles (cookies, session — sensitive)
+Project_Openclaw/browser_profile/
+Project_Openclaw/aws_profile/
+Project_Openclaw/vercel_profile/
+Project_Openclaw/stripe_profile/
+Project_Openclaw/github_profile/
+Project_Openclaw/supabase_profile/
+Project_Openclaw/openrouter_profile/
+Project_Openclaw/cloudflare_profile/
+Project_Openclaw/replit_profile/
+Project_Openclaw/x_profile/
+Project_Openclaw/render_profile/
+Project_Openclaw/n8n_profile/
+Project_Openclaw/ngrok_profile/
+Project_Openclaw/pinecone_profile/
+Project_Openclaw/gemini_profile/
+Project_Openclaw/google_cloud_profile/
+Project_Openclaw/polywog_profile/
+Project_Openclaw/anthropic_profile/
+Project_Openclaw/zapier_profile/
+**/secrets-backup/**
+**/*secrets*backup*/
+**/env_var_secret*/**
+**/env_var*.env
+*.env
+**/AWS Access Key*
+**/*Secrets*.txt
+**/*.pem
+# GitHub notes in vault (may contain PATs; never commit)
+Vikram GPT/Vikram GPT_Github/Vikram GPT Github.txt
+# Windows AWS CLI home (never copy into repo)
+.aws/
+
+# LAN credential notes VMS keeps only on disk (never commit)
+generated/secrets_local/*
+!generated/secrets_local/README.md
+
+# --- Generated runtime outputs / logs / temp ---
+*.log
+temp_out.json
+**/generated/logs/**
+**/generated/temp/**
+**/generated/_backlog_/**
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Build artifacts ---
+*.zip
+*.tmp
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.cursor/workspaceStorage/
+.cursor/CachedData/
+.cursor/Cache/
+
+# --- Lambda layers (large; permission issues on some subdirs; reorganize with Consolidate_Empire) ---
+Layers_3.11 x86_64/
+Layers_3.12 x86_64/
+Layers_3.13 x86_64/
+layers_3.11 x86_64/
+# n8n-docker/
+
+
+# Google Drive OAuth (local only)
+secrets/google_drive/credentials.json
+secrets/google_drive/token.json
+secrets/google_drive/token_gdrive_drive_scope.json
+
