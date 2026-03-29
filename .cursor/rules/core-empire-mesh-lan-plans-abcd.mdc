@@ -1,0 +1,39 @@
+---
+description: Empire LAN mesh Plans A–D — bidirectional recovery on any node; minimal VMS friction on router/new node/crash.
+alwaysApply: true
+---
+
+# Empire mesh — Plans A–D (all nodes)
+
+## Canonical doc
+
+Read **`generated/cursor-reference/EMPIRE_MESH_LAN_PLANS_ABCD_v1.md`** for Plan **A** (SMB auto-resolve + Heal), **B** (last-known IP + schedules + node_bus), **C** (UNC override / hosts), **D** (LAN down — GDrive pointers / future tunnel).
+
+Also: **`C:\Empire\whoami_HP_&_AI_X1.txt`**, **`Scripts\empire_node_routes.json`**, **`generated\cursor-multi-node\EMPIRE_NODE_MESH_DRIVE_LETTERS_v1.md`**.
+
+## VMS assumptions
+
+- VMS does **not** churn Windows share permissions after one-time setup; only notifies **new node**, **reinstall**, **router/site change**, or **mesh broken**.
+- Agents **discover IP** via Diagnose, health files, DNS, subnet scan, node_bus — do not demand VMS hand-copy IPs unless automation is blocked.
+
+## Symmetric recovery
+
+- **HP** runs `Empire_Node_Mesh_Heal.ps1 -NodeRole HP`, `Set_Empire_LAN_Link.ps1`, Diagnose/Push to worker.
+- **Worker (AI_X1)** runs `Empire_Node_Mesh_Heal.ps1 -NodeRole AI_X1`, `Set_Empire_LAN_Link_To_HP.ps1`, `Sync_Empire_Mesh_Scripts_To_HP_From_AI_X1.ps1` when pushing to HP.
+- Escalate **A → B → C → D**; same-LAN never skip A.
+
+## Commands to VMS
+
+Always **one** full path per step, e.g. `powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\....ps1"` — see **`core-one-line-copypaste.mdc`**.
+
+## Discovery + node_bus cadence (no “ask VMS to say mesh OK”)
+
+When LAN/share is up, agents **run** (do not delegate to VMS): **`Scripts\Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1`** then canonical **`python Scripts\Sync_Discovered_Cursor_Paths.py`** on HP. Admin queue jobs use **`Submit_AI_X1_Admin_RunScript.ps1`** (resolves bus root without requiring **`Z:`** if UNC/env/routes work).
+
+## On-demand reconnect (before jobs)
+
+**`Submit_AI_X1_Admin_RunScript.ps1`** and **`Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1`** call **`Scripts\Empire_Invoke_HP_Mesh_Heal_OnDemand.ps1`** when the worker path is missing — runs **`Empire_Node_Mesh_Heal.ps1 -NodeRole HP`** (remap **`Z:`**, re-resolve worker IP). Scheduled logon heal still applies; this adds **job-time** heal so agents do not “wait for share to be up” without trying.
+
+## Local secrets
+
+Passwords only in **Machine** env or **`generated\secrets_local\`** (gitignored). Never commit; never paste full secrets in chat.
