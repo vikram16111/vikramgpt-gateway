@@ -158,6 +158,10 @@ function Test-WorkerEmpireShare {
 
 function Test-WorkerSharesForIp {
     param([string]$Ip, [string[]]$ShareNames, [string]$User, [string]$Pass)
+    if (Test-EmpireIpIsThisMachine -Ip $Ip) {
+        Write-Step "SKIP: $Ip is this PC's own IPv4 (not AI_X1). empire_lan_worker_last_ip.txt or discovery pointed at HP by mistake."
+        return $null
+    }
     Write-Step "SMB map probes for \\$Ip\<share> (temporary drive letters) - not frozen; each net use can take ~10-45s if the host is slow"
     foreach ($s in $ShareNames) {
         if ([string]::IsNullOrWhiteSpace($s)) { continue }
@@ -191,18 +195,26 @@ function Resolve-WorkerIpDynamic {
 
     $fromFile = Read-LastKnownIpFromFiles -Paths $tryFiles
     if ($fromFile) {
-        Write-Step "Trying last-known IP from file: $fromFile (SMB candidate shares)"
-        if (-not (Test-TcpPort -TargetAddress $fromFile -Port 445 -TimeoutMs $TimeoutMs)) {
-            Write-Step "SKIP: $($fromFile):445 not reachable within ${TimeoutMs}ms (offline/firewall) - not stuck; trying next method"
+        if (Test-EmpireIpIsThisMachine -Ip $fromFile) {
+            Write-Step "SKIP: last-known IP file lists $fromFile = THIS PC (wrong). Delete or replace with AI_X1's IPv4 (ipconfig on worker)."
         } else {
-            $won = Test-WorkerSharesForIp -Ip $fromFile -ShareNames $ShareNames -User $Username -Pass $Password
-            if ($won) { $script:ResolvedWorkerShareName = $won; return $fromFile }
+            Write-Step "Trying last-known IP from file: $fromFile (SMB candidate shares)"
+            if (-not (Test-TcpPort -TargetAddress $fromFile -Port 445 -TimeoutMs $TimeoutMs)) {
+                Write-Step "SKIP: $($fromFile):445 not reachable within ${TimeoutMs}ms (offline/firewall) - not stuck; trying next method"
+            } else {
+                $won = Test-WorkerSharesForIp -Ip $fromFile -ShareNames $ShareNames -User $Username -Pass $Password
+                if ($won) { $script:ResolvedWorkerShareName = $won; return $fromFile }
+            }
         }
     }
 
     foreach ($raw in @($CommaSeparatedIps -split ',')) {
         $ip = $raw.Trim()
         if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') {
+            if (Test-EmpireIpIsThisMachine -Ip $ip) {
+                Write-Step "SKIP fallback IP $ip (this PC, not worker)"
+                continue
+            }
             Write-Step "Trying fallback IP: $ip"
             if (-not (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs $TimeoutMs)) {
                 Write-Step "SKIP: $($ip):445 not reachable within ${TimeoutMs}ms"
@@ -219,6 +231,7 @@ function Resolve-WorkerIpDynamic {
             $dns = Resolve-DnsName $hn -ErrorAction Stop | Where-Object { $_.IPAddress } | Select-Object -First 1
             if ($dns -and $dns.IPAddress) {
                 $ip = [string]$dns.IPAddress
+                if (Test-EmpireIpIsThisMachine -Ip $ip) { continue }
                 if (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs $TimeoutMs) {
                     $won = Test-WorkerSharesForIp -Ip $ip -ShareNames $ShareNames -User $Username -Pass $Password
                     if ($won) { $script:ResolvedWorkerShareName = $won; return $ip }
@@ -240,6 +253,7 @@ function Resolve-WorkerIpDynamic {
     } catch {}
 
     foreach ($ip in $candidates) {
+        if (Test-EmpireIpIsThisMachine -Ip $ip) { continue }
         if (-not (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs $TimeoutMs)) { continue }
         $won = Test-WorkerSharesForIp -Ip $ip -ShareNames $ShareNames -User $Username -Pass $Password
         if ($won) { $script:ResolvedWorkerShareName = $won; return [string]$ip }
@@ -402,6 +416,10 @@ Ensure-PrivateNetwork
 Ensure-DiscoveryAndSharing
 if (-not [string]::IsNullOrWhiteSpace($WorkerIp)) {
     $wip = $WorkerIp.Trim()
+    if (Test-EmpireIpIsThisMachine -Ip $wip) {
+        Write-Host "[Empire-LAN] FAIL: -WorkerIp $wip is THIS PC's address, not AI_X1. Run ipconfig on AI_X1 and pass that IPv4." -ForegroundColor Yellow
+        exit 1
+    }
     Write-Step "Verifying $wip against SMB share candidates ($($shareNamesForProbe -join ', '))"
     $won = Test-WorkerSharesForIp -Ip $wip -ShareNames $shareNamesForProbe -User $Username -Pass $Password
     if (-not $won) {
@@ -462,13 +480,15 @@ if ($ScheduleWatcher) {
 }
 
 try {
-    if (-not [string]::IsNullOrWhiteSpace($PersistLastIpTo)) {
+    if (Test-EmpireIpIsThisMachine -Ip $WorkerIp) {
+        Write-Step "WARN: Not saving empire_lan_worker_last_ip.txt (resolved IP is this PC - misconfiguration)."
+    } elseif (-not [string]::IsNullOrWhiteSpace($PersistLastIpTo)) {
         $dir = Split-Path -Parent $PersistLastIpTo
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         Set-Content -LiteralPath $PersistLastIpTo -Value $WorkerIp -Encoding ascii
         Write-Step "Saved last worker IP for next boot: $PersistLastIpTo"
     }
-    if (-not [string]::IsNullOrWhiteSpace($AlsoPersistLastIpTo)) {
+    if (-not (Test-EmpireIpIsThisMachine -Ip $WorkerIp) -and -not [string]::IsNullOrWhiteSpace($AlsoPersistLastIpTo)) {
         $dir2 = Split-Path -Parent $AlsoPersistLastIpTo
         if (-not (Test-Path -LiteralPath $dir2)) { New-Item -ItemType Directory -Path $dir2 -Force | Out-Null }
         Set-Content -LiteralPath $AlsoPersistLastIpTo -Value $WorkerIp -Encoding ascii

@@ -50,6 +50,10 @@ if (-not $UncScripts) {
             $WorkerIp = (Get-Content -LiteralPath $hint -First 1).Trim()
         }
     }
+    if ($WorkerIp -and (Test-EmpireIpIsThisMachine -Ip $WorkerIp)) {
+        Write-Host "[Empire-Push] FAIL: $hint lists THIS PC ($WorkerIp), not AI_X1. On AI_X1 run ipconfig; set line 1 to that IPv4, or: -WorkerIp <AI_X1_IP>" -ForegroundColor Yellow
+        exit 1
+    }
     if (-not $WorkerIp) {
         Write-Host "[Empire-Push] FAIL: Set -WorkerIp or create $hint (one IPv4 line) or -UncScripts." -ForegroundColor Yellow
         exit 1

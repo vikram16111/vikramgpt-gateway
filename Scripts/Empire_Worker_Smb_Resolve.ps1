@@ -18,6 +18,50 @@ function Get-CmdNulQuietResolve {
 
 
 
+function Get-EmpireLocalIPv4Set {
+
+    $h = @{}
+
+    try {
+
+        foreach ($na in Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue) {
+
+            $ip = ([string]$na.IPAddress).Trim()
+
+            if ($ip.Length -eq 0) { continue }
+
+            $h[$ip] = $true
+
+        }
+
+    } catch {}
+
+    return $h
+
+}
+
+
+
+function Test-EmpireIpIsThisMachine {
+
+    param(
+
+        [string]$Ip,
+
+        [hashtable]$LocalIPv4Set
+
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Ip)) { return $false }
+
+    if (-not $LocalIPv4Set) { $LocalIPv4Set = Get-EmpireLocalIPv4Set }
+
+    return $LocalIPv4Set.ContainsKey($Ip.Trim())
+
+}
+
+
+
 function Convert-RepoRelPathToCandidate {
 
     param([string]$RelPath)

@@ -19,6 +19,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "Empire_Worker_Smb_Resolve.ps1")
 $junctionPath = "C:\Empire_AI_X1"
 $targetDriveLetter = ($TargetDrive.Trim() -replace ':$', '')
 if ($targetDriveLetter.Length -ne 1) {
@@ -92,6 +93,14 @@ $remoteZ = Get-SmbRemotePathForDriveLetter -LetterColon $localPath
 if (-not $remoteZ) {
   Write-Host "FAIL: Could not read SMB remote path for $localPath (net use / Get-SmbMapping)." -ForegroundColor Red
   exit 1
+}
+
+if ($remoteZ -match '^\\\\(\d{1,3}(?:\.\d{1,3}){3})\\') {
+  $zSrv = $Matches[1]
+  if (Test-EmpireIpIsThisMachine -Ip $zSrv) {
+    Write-Host "FAIL: Z: points at THIS PC ($zSrv), not AI_X1. Run Set_Empire_LAN_Link.ps1 -WorkerIp <IPv4 from ipconfig on AI_X1>." -ForegroundColor Yellow
+    exit 1
+  }
 }
 
 $workerRootUnc = Resolve-EmpireAiX1RootUncFromMappedDrive -MappedRemoteUnc $remoteZ
