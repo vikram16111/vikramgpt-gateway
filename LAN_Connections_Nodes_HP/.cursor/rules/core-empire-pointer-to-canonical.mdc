@@ -1,0 +1,19 @@
+---
+description: Stub rule — full Empire doctrine lives under C:\Empire; agents must read canonical paths when this workspace is not the CORE folder.
+alwaysApply: true
+---
+
+# Empire — pointer to canonical CORE (HP control plane)
+
+This workspace is a **satellite** Cursor root. **Binding doctrine files** (full `.mdc` set) live on the HP control plane:
+
+- **Rules (human + agent edits):** `C:\Empire\.cursor\rules\`
+- **Doctrine index:** `C:\Empire\generated\cursor-reference\DOCTRINE_INDEX.md`
+- **Mesh / LAN Plans A–D:** `C:\Empire\generated\cursor-reference\EMPIRE_MESH_LAN_PLANS_ABCD_v1.md`
+- **All discovered roots (audit):** `C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt`
+
+**Mandatory agent behavior:** Before claiming Empire-wide policy, **open or reference** the above paths from disk (same machine or `\\HP-SPECTRE\Empire\...` / `Z:` from worker). Do not treat this folder’s small stub as the full ruleset.
+
+**VMS audit:** One file to skim — `C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt` — refreshed by `Scripts\Sync_Discovered_Cursor_Paths.py` (heartbeat on HP, merge from nodes).
+
+**Optional:** Run `Scripts\Sync_Empire_Shared_Cursor_Rules.ps1 -Strategy Full` on this root if you need a full offline copy of all `.mdc` files here (large sync).
