@@ -14,6 +14,13 @@
 - **GitHub** (`vikramgpt-gateway`, branch **`main`**) = **shared history** and backup other machines can clone.
 - **Each PC** still has a **folder with a `.git`** (e.g. **`C:\Empire`** on HP) = your **working copy**. You edit files there; **`git push`** sends commits to GitHub; **`git pull`** brings GitHub’s commits down. Nothing replaces that — Git always needs a local tree to work on.
 
+## Who can push to GitHub? (not only HP)
+
+- **Any machine** that has a **clone** of the repo and **Git credentials** (Git Credential Manager / PAT / SSH) **can** push to **`main`** — GitHub does not enforce “HP only.”
+- **Convention for Empire:** treat **`C:\Empire` on HP** as the **primary** place Cursor/agents commit **Empire monorepo** changes (Lambdas, `Scripts`, `.cursor/rules`) so history stays predictable.
+- **AI_X1:** use a **separate clone** (e.g. `C:\Empire_AI_X1\repos\vikramgpt-gateway`) if you want to push from the worker; **do not** turn the whole live `C:\Empire_AI_X1` tree into the only git working copy without knowing what you are replacing.
+- **Other workspaces/projects** (e.g. under `D:\`) stay **their own Git repos** unless you explicitly add them as remotes or submodules — **not** mixed into `vikramgpt-gateway` unless you choose to.
+
 ## Keep nodes aligned (hands-free pattern)
 
 **HP** (after you commit/push script or rule changes):

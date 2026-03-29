@@ -14,10 +14,17 @@ param(
     # Empty = auto: <Empire root next to Scripts>\generated\health\empire_lan_worker_last_ip.txt
     [string]$PersistLastIpTo = "",
     [string]$AlsoPersistLastIpTo = "",
-    [string]$TryTheseIpsFirst = ""
+    [string]$TryTheseIpsFirst = "",
+    # Off by default: neighbor sweep + /254 scan can take many minutes (looks "stuck"). Set -AllowSlowLanScan or EMPIRE_LAN_ALLOW_SLOW_LAN_SCAN=1 to enable.
+    [switch]$AllowSlowLanScan
 )
 
 $ErrorActionPreference = "Stop"
+
+$script:EmpireLanDoSlowScan = $AllowSlowLanScan
+if (-not $script:EmpireLanDoSlowScan -and ($env:EMPIRE_LAN_ALLOW_SLOW_LAN_SCAN -eq '1')) {
+    $script:EmpireLanDoSlowScan = $true
+}
 
 $EmpireRoot = Split-Path -Parent $PSScriptRoot
 $EmpireHealthDir = Join-Path $EmpireRoot "generated\health"
@@ -220,6 +227,11 @@ function Resolve-WorkerIpDynamic {
         } catch {}
     }
 
+    if (-not $script:EmpireLanDoSlowScan) {
+        Write-Step "SKIP slow LAN discovery (ARP neighbors + /24 scan). Fast path only. To enable: -AllowSlowLanScan or set Machine env EMPIRE_LAN_ALLOW_SLOW_LAN_SCAN=1"
+        return $null
+    }
+
     $candidates = @()
     try {
         $candidates = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -235,7 +247,7 @@ function Resolve-WorkerIpDynamic {
 
     $prefix = Get-Local192SubnetPrefix
     if ($prefix) {
-        Write-Step "Scanning $prefix.0/24 for SMB (candidate shares from EMPIRE_WORKER_SMB_CANDIDATES.json) - may take 1-3 min"
+        Write-Step "Scanning $prefix.0/24 for SMB (candidate shares) - may take several minutes"
         foreach ($n in 1..254) {
             $ip = "$prefix.$n"
             if (-not (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs ([Math]::Min(400, $TimeoutMs)))) { continue }
