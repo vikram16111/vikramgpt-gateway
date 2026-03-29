@@ -1,6 +1,8 @@
-# generated_LAN_Connections_Nodes_HP
+# generated_Project_LAN_Connections_Nodes_HP
 
-**Canonical child-project output root** for `LAN_Connections_Nodes_HP` (see `core-generated-child-canonical.mdc`).
+**Canonical child-project output root** for `Project_LAN_Connections_Nodes_HP` (see `core-generated-child-canonical.mdc`).
+
+**Rename discipline:** If this project folder is renamed, this directory **must** be renamed to match: `generated_<ExactProjectFolderName>\`.
 
 ## Use this folder for
 

@@ -1,0 +1,37 @@
+---
+description: DISCOVERED_CURSOR_PATHS canonical on HP; auto Python sync; merge node locals; stub vs full rules sync.
+globs: generated/DISCOVERED_CURSOR_PATHS.txt,**/cursor_paths_extra_roots.txt,**/cursor_paths_node_roots.txt,**/cursor_paths_merge_sources.txt,**/cursor_paths_full_rules_roots.txt,Scripts/Sync_Discovered_Cursor_Paths.py
+---
+
+# DISCOVERED_CURSOR_PATHS + rules hybrid
+
+## Canonical audit file (HP)
+
+- **`C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt`** — **do not hand-edit.** VMS audits **only this file** for “all workspaces.” After **renaming or moving** any tracked Cursor root under `C:\Empire`, re-run the generator (see **`core-empire-workspace-rename-relocate-discipline.mdc`**).
+- **Generator:** `Scripts/Sync_Discovered_Cursor_Paths.py`
+  - **EMPIRE_ROOT** — default `C:\Empire`; on worker e.g. `C:\Empire_AI_X1` for local publish.
+  - **DISCOVERED_CURSOR_OUTPUT** — override output path (worker → `generated\DISCOVERED_CURSOR_PATHS_LOCAL.txt`).
+  - **DISCOVERED_CURSOR_NO_MERGE** = `1` on workers (skip reading merge sources).
+  - **DISCOVERED_CURSOR_LOCAL_TREE_ONLY** = `1` when publishing from HP onto **`Z:\`** / UNC so the list is **only** `EMPIRE_ROOT` (no HP `D:\` / `vikramgpt` bleed).
+  - **Merge:** `generated/cursor_paths_merge_sources.txt` lists files to merge (e.g. `Z:\generated\DISCOVERED_CURSOR_PATHS_LOCAL.txt`).
+- **Filter:** only directories with a **substantive** `.cursor` tree (≥1 non-empty file under `.cursor/`).
+- **Hands-free HP:** `Scripts/empire_heartbeat.py` runs the script ≤ every **24h** (`EMPIRE_CURSOR_PATHS_SYNC_HOURS`).
+
+## Workers publish local list
+
+- **On AI_X1:** `Scripts/Publish_Local_Discovered_Cursor_Paths.ps1` (or set env + Python).
+- **From HP (share visible, Z: optional):** `Scripts/Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1` — writes `Z:\generated\DISCOVERED_CURSOR_PATHS_LOCAL.txt` (or UNC), then merges into HP canonical file.
+
+## Rules sync (not 29×N file copies by default)
+
+- `Scripts/Sync_Empire_Shared_Cursor_Rules.ps1` **default `-Strategy Auto`:** **full** rules only for roots in `generated/cursor_paths_full_rules_roots.txt` (default `C:\Empire`); **all other** discovered roots get **stub** `core-empire-pointer-to-canonical.mdc` only.
+- **`-Strategy Full`** — legacy, copies every `.mdc` to every root.
+
+## Manual refresh (HP)
+
+```bash
+python C:\Empire\Scripts\Sync_Discovered_Cursor_Paths.py
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Sync_Empire_Shared_Cursor_Rules.ps1"
+```
+
+Doctrine: **`generated/cursor-reference/EMPIRE_NODE_LAYOUT_AND_PATHS_v1.md`**.

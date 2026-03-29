@@ -1,0 +1,34 @@
+---
+description: Mandatory checklist when renaming, relocating, or migrating Empire/Cursor project roots (paths, discovery, docs, git).
+alwaysApply: true
+---
+
+# Empire — workspace rename, relocate, migrate (discipline)
+
+Applies to **any** project/workspace under `C:\Empire`, `C:\Empire_AI_X1`, or other node roots that appear in **`generated\DISCOVERED_CURSOR_PATHS.txt`**, **node_bus**, scheduled tasks, or cross-references.
+
+## Before you rename/move a folder
+
+1. **Search the repo** for the **old absolute path** and **old folder basename** (grep / Cursor search): `C:\Empire\OldName`, `OldName`, `generated_OldName`, stubs in `.cursor/rules`, `AGENTS.md`, `README.md`, `Scripts\` comments, `lambda_memory`, `test_events`, and **`generated\cursor-reference\*.md`**.
+2. **Child `generated_*` folder:** If the project uses `generated_<ProjectFolderName>\` (Empire children under `C:\Empire`), **rename that directory to match** the new project folder name exactly (`generated_NewProjectName\`).
+3. **Update layout doctrine:** `generated\cursor-reference\EMPIRE_NODE_LAYOUT_AND_PATHS_v1.md` (and any other index that lists this root).
+4. **Hardcoded paths in scripts:** If any `.ps1`/`.py` referenced the old path, update or parameterize (prefer env `EMPIRE_ROOT` / relative to script root).
+
+## After the move (always)
+
+5. **Regenerate discovery on HP:**  
+   `python C:\Empire\Scripts\Sync_Discovered_Cursor_Paths.py`  
+   so **`C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt`** lists the new path and drops stale entries (do not hand-edit the canonical file except in emergencies; prefer re-run).
+6. **Optional roots files:** If the old path was in `generated\cursor_paths_extra_roots.txt` or `cursor_paths_merge_sources.txt`, update those lines.
+7. **Rules sync:** `Sync_Empire_Shared_Cursor_Rules.ps1` for satellite roots that keep stubs (or re-open workspace so Cursor picks up `.cursor` changes).
+8. **Git:** `git add` / `git rm` so history shows rename; commit with a message that names **old → new** path.
+9. **Human / VMS:** Re-open the **new** folder in Cursor; update shortcuts, Task Scheduler actions, and **tell other nodes** (AI_X1, etc.) to `git pull` or recreate a **suffixed** sibling folder (e.g. `Project_*_AI_X1`) — ad-hoc copy-paste is not binding; see `core-empire-adhoc-vs-constitution.mdc`.
+10. **Scheduled tasks / node_bus / mesh:** Search for the old path in XML tasks, job JSON, and bridge configs on **each machine** that ran automation.
+
+## Multi-node naming
+
+When the **same logical project** exists on more than one PC, use a **node suffix** in the folder name (`_HP`, `_AI_X1`, …) so SMB mirrors and chat instructions do not collide.
+
+## Summary
+
+**Grep → rename generated_* → layout doc → sync discovery → git → reopen Cursor → check tasks and workers.**

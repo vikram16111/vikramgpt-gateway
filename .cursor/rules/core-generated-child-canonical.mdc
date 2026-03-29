@@ -1,0 +1,26 @@
+---
+description: Child projects use one canonical generated_* root; legacy generated/ is migration-only.
+globs: Project_Openclaw/**,Browser_Operator/**,Project_LAN_Connections_Nodes_HP/**,**/generated/**
+---
+
+# Child project `generated` — single canonical root
+
+## Canon (Empire children)
+
+- **Preferred new outputs:** `generated_<ProjectShort>\` (e.g. `generated_Project_Openclaw`, `generated_Browser_Operator`).
+- **Legacy:** `generated\` under the same project may still exist during migration—**do not add new long-lived artifacts there**; add new files under `generated_<ProjectShort>\` unless a tracked migration task says otherwise.
+
+## Empire root
+
+- **`C:\Empire\generated\`** remains the **CORE** rolling area for parent-repo outputs (not renamed to a suffixed name).
+- **Email AI:** **RAW on HP (`D:\Outlook\...`); machine-readable on AI_X1 `HP_D_MIRROR` (see `Z:\HP_D_MIRROR\...` from HP when mapped).** Not `generated\projects\email_ai_Empire_HP\` (legacy mistake bucket). See `empire-generated-emailai-vms-junk-nodebus.mdc` + `generated/automation/EMAIL_AI_ARCHIVES_REGISTRY_v1.json`.
+
+## D:\ and other non-`C:\Empire` Cursor workspaces (hybrid / “Starlink”)
+
+- **Do not** impose Empire-child `generated_<ProjectShort>\` rules on **`D:\...`** (e.g. Kundli, legal, personal trees). Those workspaces keep **their own** doctrine: **`AGENTS.md`**, **`.cursor/rules/project-link.mdc`**, **`filesystem-user-path-trust.mdc`**, and **project-local `generated\`** (or paths they already document).
+- **Empire repo rules** that sync as **stub** pointers still apply for cross-cutting behavior (hands-free, secrets, mesh); **generated layout** for those roots follows **that project’s** README/AGENTS, not this file’s Empire-child suffix convention.
+
+## Agents
+
+- When editing scripts or docs, **prefer paths** that point at `generated_<ProjectShort>\` for **Empire children under `C:\Empire`** only.
+- Consolidating legacy → canonical is a **deliberate** migration (grep references, backup first)—not a silent one-shot rename in chat.

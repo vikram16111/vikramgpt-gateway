@@ -1,0 +1,28 @@
+---
+description: Project_LAN_Connections_Nodes_HP scope — generated_Project_LAN_* matches folder name; scripts under C:\Empire\Scripts; worker sibling Project_LAN_Connections_Nodes_AI_X1.
+alwaysApply: true
+---
+
+# Project_LAN_Connections_Nodes_HP — workspace scope
+
+## Naming (avoid cross-node confusion)
+
+- **This project (HP):** `Project_LAN_Connections_Nodes_HP` under `C:\Empire\`.
+- **Worker (e.g. AI_X1):** **`Project_LAN_Connections_Nodes_AI_X1`** under `C:\Empire_AI_X1\` — same purpose, node-local paths and screenshots.
+
+## Outputs
+
+- **This repo’s child outputs:** only under **`generated_Project_LAN_Connections_Nodes_HP\`** (must match project folder name prefix `generated_`). See that folder’s `README.md`.
+- **Operational mesh state** (shared by automation): `C:\Empire\generated\health\` and core `C:\Empire\generated\logs\` as documented in the project `README.md`.
+
+## Scripts
+
+- **Do not** treat copies under a worker share as the place to edit logic long-term. **Canonical:** `C:\Empire\Scripts\` on HP; workers receive updates via **Push** / git pull per mesh playbook.
+
+## Ad-hoc vs constitution
+
+- Checked-in rules and `AGENTS.md` are **constitution**. Chat/postman copy-paste is **advice** — verify local `ipconfig`, `net use`, and shares before acting.
+
+## Rename / relocate
+
+- Follow **`core-empire-workspace-rename-relocate-discipline.mdc`** on `C:\Empire` (grep, discovery sync, layout docs, git).

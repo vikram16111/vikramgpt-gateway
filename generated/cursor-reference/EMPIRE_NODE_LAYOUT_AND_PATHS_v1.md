@@ -38,15 +38,16 @@
 
 ---
 
-## LAN_Connections_Nodes (mesh runbook workspaces)
+## Project_LAN_Connections_Nodes (mesh runbook workspaces)
 
 | Node | Path | Note |
 |------|------|------|
-| **HP** | `C:\Empire\LAN_Connections_Nodes_HP` | Dedicated Cursor root for LAN/SMB mesh docs + `generated_LAN_Connections_Nodes_HP\`. |
-| **AI_X1** | `C:\Empire_AI_X1\LAN_Connections_Nodes_AI_X1` (recommended) | Same purpose, **suffixed** so the name is not confused with HP’s folder. |
+| **HP** | `C:\Empire\Project_LAN_Connections_Nodes_HP` | Dedicated Cursor root for LAN/SMB mesh docs + `generated_Project_LAN_Connections_Nodes_HP\`. |
+| **AI_X1** | `C:\Empire_AI_X1\Project_LAN_Connections_Nodes_AI_X1` (recommended) | Same purpose; **`Project_` prefix** + **`_AI_X1`** suffix so the name is not confused with HP’s folder. |
 
 - **Scripts (canonical):** always `C:\Empire\Scripts\` on HP; workers receive updates via Push / git per mesh playbook.
-- **Naming convention (new multi-node workspaces):** include **node suffix** (`_HP`, `_AI_X1`, …) in the folder name when the same logical project exists on more than one machine.
+- **Naming convention (new multi-node workspaces):** use a clear **project prefix** (e.g. `Project_`) and **node suffix** (`_HP`, `_AI_X1`, …) when the same logical project exists on more than one machine.
+- **Renames / moves:** follow `C:\Empire\.cursor\rules\core-empire-workspace-rename-relocate-discipline.mdc` and re-run `Sync_Discovered_Cursor_Paths.py`.
 
 ---
 
@@ -74,4 +75,4 @@ Strategic direction letter (Round 1): **`MyGPT_modification suggestions\Later_Em
 
 ---
 
-**Rev:** v1.1 — 2026-03-29 — LAN_Connections_Nodes_* layout + node-suffix naming note.
+**Rev:** v1.2 — 2026-03-29 — `Project_LAN_Connections_Nodes_HP` rename + rename/relocate discipline pointer.

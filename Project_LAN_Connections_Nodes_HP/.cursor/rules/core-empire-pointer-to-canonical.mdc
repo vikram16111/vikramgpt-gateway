@@ -10,6 +10,7 @@ This workspace is a **satellite** Cursor root. **Binding doctrine files** (full 
 - **Rules (human + agent edits):** `C:\Empire\.cursor\rules\`
 - **Doctrine index:** `C:\Empire\generated\cursor-reference\DOCTRINE_INDEX.md`
 - **Mesh / LAN Plans A–D:** `C:\Empire\generated\cursor-reference\EMPIRE_MESH_LAN_PLANS_ABCD_v1.md`
+- **Rename / relocate discipline:** `C:\Empire\.cursor\rules\core-empire-workspace-rename-relocate-discipline.mdc`
 - **All discovered roots (audit):** `C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt`
 
 **Mandatory agent behavior:** Before claiming Empire-wide policy, **open or reference** the above paths from disk (same machine or `\\HP-SPECTRE\Empire\...` / `Z:` from worker). Do not treat this folder’s small stub as the full ruleset.

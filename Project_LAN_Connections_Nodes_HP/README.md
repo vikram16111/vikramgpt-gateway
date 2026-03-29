@@ -1,7 +1,9 @@
-# LAN_Connections_Nodes_HP
+# Project_LAN_Connections_Nodes_HP
 
 Dedicated Cursor workspace on **HP** for **Empire LAN / SMB mesh** between HP and workers (e.g. **AI_X1**).  
-**Naming:** suffix **`_HP`** on this node; on **AI_X1** use **`LAN_Connections_Nodes_AI_X1`** (or equivalent `_*_AI_X1`) so project names are not confused across machines.
+**Naming:** folder prefix **`Project_`**, suffix **`_HP`** on this node; on **AI_X1** use **`Project_LAN_Connections_Nodes_AI_X1`** so names are not confused across machines.
+
+**Rename / move discipline:** `C:\Empire\.cursor\rules\core-empire-workspace-rename-relocate-discipline.mdc`
 
 ---
 
@@ -10,11 +12,11 @@ Dedicated Cursor workspace on **HP** for **Empire LAN / SMB mesh** between HP an
 | Is | Is not |
 |----|--------|
 | Runbook + agent context for Z:/Y: mesh | A second copy of `C:\Empire\Scripts` logic to edit long-term |
-| Place for **this project’s** notes under `generated_LAN_Connections_Nodes_HP\` | Replacement for `C:\Empire\generated\health\` (scripts still read health there) |
+| Place for **this project’s** notes under `generated_Project_LAN_Connections_Nodes_HP\` | Replacement for `C:\Empire\generated\health\` (scripts still read health there) |
 
 **Canonical script source:** `C:\Empire\Scripts\`  
 **Canonical Empire rolling docs/logs (core):** `C:\Empire\generated\`  
-**This child’s outputs:** `generated_LAN_Connections_Nodes_HP\` only.
+**This child’s outputs:** `generated_Project_LAN_Connections_Nodes_HP\` only.
 
 ---
 
@@ -125,7 +127,7 @@ On **AI_X1**, not HP:
 2. Share **one** of the layouts expected by `EMPIRE_WORKER_SMB_CANDIDATES.json` (e.g. share name **`Empire_AI_X1`** mapping to repo root with **`Scripts`** inside, or nested `Empire\Empire_AI_X1\Scripts`).
 3. **Reverse link to HP:** run mesh heal for worker:  
    `Empire_Node_Mesh_Heal.ps1 -NodeRole AI_X1` (uses `Set_Empire_LAN_Link_To_HP.ps1`).
-4. **Sibling docs folder:** create **`LAN_Connections_Nodes_AI_X1`** (or similar) with the same structure as this project but **node-local** IPs and screenshots.
+4. **Sibling docs folder:** **`Project_LAN_Connections_Nodes_AI_X1`** — same structure as this project but **node-local** IPs and screenshots.
 
 ---
 
@@ -139,6 +141,7 @@ On **AI_X1**, not HP:
 ## 7. Cursor rules (constitution vs ad-hoc)
 
 - **Constitution:** Files under `C:\Empire\.cursor\rules\` (and related doctrine). Includes:
+  - `core-empire-workspace-rename-relocate-discipline.mdc` — renames, moves, migrations.
   - `core-empire-multi-node-mirror-register.mdc` — HP control, mirror register, ownership unchanged when copying.
   - `core-empire-adhoc-vs-constitution.mdc` — postman/chat messages are **advice**; nodes verify **local** state.
   - Multi-node memory, mesh LAN plans reference under `generated\cursor-reference\`.
@@ -146,24 +149,24 @@ On **AI_X1**, not HP:
 
 ---
 
-## 8. Using `generated_LAN_Connections_Nodes_HP`
+## 8. Using `generated_Project_LAN_Connections_Nodes_HP`
 
-See **`generated_LAN_Connections_Nodes_HP\README.md`**.  
+See **`generated_Project_LAN_Connections_Nodes_HP\README.md`**.  
 Use it for optional local logs/exports. **Do not** move canonical health JSON/txt here unless you are deliberately archiving a copy (scripts won’t read that copy).
 
 ---
 
 ## 9. Open this folder in Cursor
 
-**File → Open Folder →** `C:\Empire\LAN_Connections_Nodes_HP`
+**File → Open Folder →** `C:\Empire\Project_LAN_Connections_Nodes_HP`
 
-Then run on HP (once):
+Then run on HP after any path change:
 
 ```powershell
 python C:\Empire\Scripts\Sync_Discovered_Cursor_Paths.py
 ```
 
-so this root is listed in `C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt` (needs non-empty `.cursor` files — satisfied by the rules in this scaffold).
+so this root is listed in `C:\Empire\generated\DISCOVERED_CURSOR_PATHS.txt`.
 
 Optional:
 
@@ -182,4 +185,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Sync_Empi
 
 ---
 
-**Rev:** 2026-03-29 — scaffold for `LAN_Connections_Nodes_HP`.
+**Rev:** 2026-03-29 — renamed to `Project_LAN_Connections_Nodes_HP`; child `generated_*` aligned.
