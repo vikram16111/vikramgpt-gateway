@@ -9,6 +9,10 @@
 - **2026-03-29:** Merged unrelated **`origin/main`** (existing gateway workflow + Python) with local commits; resolved **`README.md`**; **`git push origin main`** succeeded (`7d6e5f5` on `main`).
 - **ChatGPT pg41 letter** (`empire-core` nested tree): **not** adopted as-is — see **`generated/cursor-reference/CHATGPT_pg41_GITHUB_LETTER_VS_REPO_v1.md`** (monorepo stays **`C:\Empire`**, remote **`vikramgpt-gateway`**).
 
+## What “git pull on HP” means (one line)
+
+**`cd C:\Empire` then `git pull origin main`** = **download** the latest commits **from GitHub** into **this folder** on HP. Use it after you (or another machine) **pushed** changes, so HP matches GitHub. It does **not** map drives or fix SMB — it only updates Git-tracked files.
+
 ## What VMS supplies (one reply to agent)
 
 1. **Remote URL** — private GitHub/GitLab repo, e.g. `https://github.com/<org>/empire-core.git` or SSH `git@github.com:<org>/empire-core.git`.

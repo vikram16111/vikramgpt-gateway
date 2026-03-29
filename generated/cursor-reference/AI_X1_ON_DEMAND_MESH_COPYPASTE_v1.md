@@ -27,3 +27,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Push_Empi
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire_AI_X1\Scripts\Empire_Node_Mesh_Heal.ps1" -NodeRole AI_X1
 ```
+
+## HP: junction `C:\Empire_AI_X1` -> `Z:\` (runs mesh heal first if `Z:` missing)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Empire_Ensure_HP_EmpireAiX1_Junction.ps1"
+```

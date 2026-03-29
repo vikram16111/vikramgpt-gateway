@@ -1,25 +1,49 @@
 <#
-  RUN ON HP AS ADMIN (once per machine, or after Z: mapping changes).
+  RUN ON HP AS ADMIN (once per machine, or after mapping changes).
 
   Creates directory junction C:\Empire_AI_X1 -> Z:\ when Z: is the Empire_AI_X1 share root.
-  So agents and tools can use C:\Empire_AI_X1 on HP the same path shape as on the worker.
 
-  Preconditions:
-    - Z:\ must already map to \\<worker>\Empire_AI_X1 (run Set_Empire_LAN_Link.ps1 or mesh heal first).
-    - C:\Empire_AI_X1 must NOT exist as a normal folder with data (mklink will fail).
+  If Z: is missing: automatically runs HP mesh heal (same as node_bus jobs), waits, retries - hands-free.
 
-  Idempotent: if C:\Empire_AI_X1 already exists and is a junction to Z:\, exits OK.
+  C:\Empire_AI_X1 must NOT exist as a normal folder with data (mklink will fail).
+
+  Idempotent: if C:\Empire_AI_X1 already exists as junction to Z:\, exits OK.
+
+  -SkipLanHeal: do not auto-heal (debug only).
 #>
 param(
-  [string]$TargetDrive = "Z:"
+  [string]$TargetDrive = "Z:",
+  [int]$HealAttempts = 2,
+  [switch]$SkipLanHeal
 )
 
 $ErrorActionPreference = "Stop"
 $junctionPath = "C:\Empire_AI_X1"
 $targetRoot = if ($TargetDrive.EndsWith("\")) { $TargetDrive.TrimEnd("\") } else { $TargetDrive }
 
-if (-not (Test-Path -LiteralPath $targetRoot)) {
-  Write-Host "Target $targetRoot not found. Run mesh heal / Set_Empire_LAN_Link.ps1 first." -ForegroundColor Yellow
+$invokeHeal = Join-Path $PSScriptRoot "Empire_Invoke_HP_Mesh_Heal_OnDemand.ps1"
+
+function Test-ZOrTarget {
+  param([string]$p)
+  if ([string]::IsNullOrWhiteSpace($p)) { return $false }
+  try { return Test-Path -LiteralPath $p } catch { return $false }
+}
+
+if (-not (Test-ZOrTarget $targetRoot)) {
+  if (-not $SkipLanHeal -and (Test-Path -LiteralPath $invokeHeal)) {
+    for ($i = 0; $i -lt $HealAttempts; $i++) {
+      Write-Host "[Empire] $targetRoot missing - running HP mesh heal (attempt $($i + 1)/$HealAttempts)..." -ForegroundColor Cyan
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $invokeHeal -ScriptsRoot $PSScriptRoot
+      Start-Sleep -Seconds 4
+      if (Test-ZOrTarget $targetRoot) { break }
+    }
+  }
+}
+
+if (-not (Test-ZOrTarget $targetRoot)) {
+  Write-Host "Target $targetRoot still not reachable after heal." -ForegroundColor Yellow
+  Write-Host "Check: AI_X1 online, LAN, firewall 445, machine env EMPIRE_LAN_USER/EMPIRE_LAN_PASS, or run:" -ForegroundColor Yellow
+  Write-Host '  powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Diagnose_Empire_HP_To_AI_X1_Lan.ps1"' -ForegroundColor DarkYellow
   exit 1
 }
 
