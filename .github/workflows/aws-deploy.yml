@@ -1,0 +1,43 @@
+name: 🧩 Empire Secure Gateway Pipeline
+
+on:
+  workflow_dispatch:      # Run manually from the GitHub Actions tab
+  push:
+    branches: [ main ]    # Optional auto-trigger on main commits
+
+permissions:
+  id-token: write         # Required for OIDC
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials from GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::024914533371:role/vikramgpt-ingest-role
+          aws-region: us-east-2
+
+      - name: Verify AWS connection
+        run: |
+          echo "🔍 Checking STS caller identity..."
+          aws sts get-caller-identity
+
+      - name: Package application for deployment
+        run: |
+          mkdir -p dist
+          zip -r dist/vikramgpt_gateway.zip app.py ingest.py ingest_here.py ingest_s3.py query.py query_here.py requirements.txt
+
+      - name: Deploy to AWS Lambda (optional)
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          echo "🚀 Deploying to Lambda function: Empire_Gateway_Lambda"
+          aws lambda update-function-code \
+            --function-name Empire_Gateway_Lambda \
+            --zip-file fileb://dist/vikramgpt_gateway.zip
