@@ -7,7 +7,44 @@
 - **Commits on `main`:** small scaffold (`chore: initial commit`) + **`feat: on-demand HP mesh heal before node_bus submit and AI_X1 publish`**.
 - **Push:** run on HP in an **interactive** terminal (Git Credential Manager / PAT). Headless agents may get **`User cancelled dialog`** / **`could not read Username`** — that is expected.
 - **2026-03-29:** Merged unrelated **`origin/main`** (existing gateway workflow + Python) with local commits; resolved **`README.md`**; **`git push origin main`** succeeded (`7d6e5f5` on `main`).
-- **ChatGPT pg41 letter** (`empire-core` nested tree): **not** adopted as-is — see **`generated/cursor-reference/CHATGPT_pg41_GITHUB_LETTER_VS_REPO_v1.md`** (monorepo stays **`C:\Empire`**, remote **`vikramgpt-gateway`**).
+- **ChatGPT pg41 letter:** not adopted as a new folder layout — **`generated/cursor-reference/CHATGPT_pg41_GITHUB_LETTER_VS_REPO_v1.md`** is a **pointer only**.
+
+## GitHub vs “local” (no confusion)
+
+- **GitHub** (`vikramgpt-gateway`, branch **`main`**) = **shared history** and backup other machines can clone.
+- **Each PC** still has a **folder with a `.git`** (e.g. **`C:\Empire`** on HP) = your **working copy**. You edit files there; **`git push`** sends commits to GitHub; **`git pull`** brings GitHub’s commits down. Nothing replaces that — Git always needs a local tree to work on.
+
+## Keep nodes aligned (hands-free pattern)
+
+**HP** (after you commit/push script or rule changes):
+
+```powershell
+Set-Location C:\Empire
+git pull origin main
+git push origin main
+```
+
+**AI_X1** (separate clone recommended, does not replace the live `C:\Empire_AI_X1` tree):
+
+```powershell
+New-Item -ItemType Directory -Force -Path "C:\Empire_AI_X1\repos" | Out-Null
+Set-Location "C:\Empire_AI_X1\repos"
+if (-not (Test-Path ".\vikramgpt-gateway\.git")) { git clone https://github.com/vikram16111/vikramgpt-gateway.git }
+Set-Location ".\vikramgpt-gateway"
+git pull origin main
+```
+
+## When HP ↔ AI_X1 LAN is up — push **rules + scripts** to the worker
+
+SMB mesh is separate from Git. After **`Z:`** works:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Push_Empire_Mesh_Scripts_To_AI_X1.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Sync_Empire_Shared_Cursor_Rules.ps1"
+python C:\Empire\Scripts\Sync_Discovered_Cursor_Paths.py
+```
+
+That updates **`Scripts\`** on the share and **`.cursor\rules`** stubs/full copies on discovered roots (including under **`Z:\`** when listed).
 
 ## What “git pull on HP” means (one line)
 
