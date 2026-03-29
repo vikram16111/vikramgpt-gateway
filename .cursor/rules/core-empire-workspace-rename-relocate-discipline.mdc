@@ -22,12 +22,12 @@ Applies to **any** project/workspace under `C:\Empire`, `C:\Empire_AI_X1`, or ot
 6. **Optional roots files:** If the old path was in `generated\cursor_paths_extra_roots.txt` or `cursor_paths_merge_sources.txt`, update those lines.
 7. **Rules sync:** `Sync_Empire_Shared_Cursor_Rules.ps1` for satellite roots that keep stubs (or re-open workspace so Cursor picks up `.cursor` changes).
 8. **Git:** `git add` / `git rm` so history shows rename; commit with a message that names **old → new** path.
-9. **Human / VMS:** Re-open the **new** folder in Cursor; update shortcuts, Task Scheduler actions, and **tell other nodes** (AI_X1, etc.) to `git pull` or recreate a **suffixed** sibling folder (e.g. `Project_*_AI_X1`) — ad-hoc copy-paste is not binding; see `core-empire-adhoc-vs-constitution.mdc`.
+9. **Reopen / notify:** Re-open the **new** folder in Cursor on HP; fix shortcuts and Task Scheduler on machines you touch. **Prefer** agent-driven `git pull` / scaffold on workers when **HP ↔ node** is up — do **not** default to postman copy-paste for steps automation can run. Relay to VMS only when the link is down or a human-only gate exists; see `core-empire-project-workspace-naming.mdc`.
 10. **Scheduled tasks / node_bus / mesh:** Search for the old path in XML tasks, job JSON, and bridge configs on **each machine** that ran automation.
 
 ## Multi-node naming
 
-When the **same logical project** exists on more than one PC, use a **node suffix** in the folder name (`_HP`, `_AI_X1`, …) so SMB mirrors and chat instructions do not collide.
+**New workspaces:** **`Project_<ProjectName>_<NODE>`** (prefix `Project`, suffix node id). Full doctrine: **`core-empire-project-workspace-naming.mdc`**.
 
 ## Summary
 

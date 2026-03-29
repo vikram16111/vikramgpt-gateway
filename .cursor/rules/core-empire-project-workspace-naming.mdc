@@ -1,0 +1,41 @@
+---
+description: New Cursor workspaces under Empire use Project_<Name>_<NODE>; agents scaffold and sync—no postman busywork when HP↔node is up.
+alwaysApply: true
+---
+
+# Empire — project / workspace folder naming (all nodes)
+
+## Pattern (mandatory for new multi-node-safe roots)
+
+```
+Project_<ProjectName>_<NODE>
+```
+
+| Part | Meaning | Examples |
+|------|---------|----------|
+| **Prefix** | Fixed | `Project` |
+| **Middle** | Descriptive project name (may contain underscores) | `LAN_Connections_Nodes`, `Openclaw_Gateway`, `EmailAI` |
+| **Suffix** | **Node id** — where this folder primarily lives | `HP`, `AI_X1`, future `MINI_PC`, … |
+
+**Examples**
+
+- HP: `C:\Empire\Project_LAN_Connections_Nodes_HP`
+- AI_X1: `C:\Empire_AI_X1\Project_LAN_Connections_Nodes_AI_X1`
+
+**Legacy folders** (no `Project_` prefix) may remain until migrated; **new** scaffolds use this pattern.
+
+## Child `generated` (Empire children under `C:\Empire`)
+
+- Use **`generated_Project_<ProjectName>_<NODE>\`** matching the **exact** project folder basename, e.g. `generated_Project_LAN_Connections_Nodes_HP\`.  
+- See `core-generated-child-canonical.mdc` and `core-empire-workspace-rename-relocate-discipline.mdc`.
+
+## Agent execution (hands-free / eyes-free)
+
+- **When HP can run tools** (disk, shell, git, `Scripts\`, SMB up): the **agent creates/renames folders**, updates `AGENTS.md` / `README.md`, runs **`Sync_Discovered_Cursor_Paths.py`**, and commits/pushes per doctrine — **do not** push routine “postman copy-paste” steps to VMS for work the agent can do.
+- **Postman-style relay** (VMS carries a message to another machine **without** automation): **only** when **HP ↔ worker** link is actually down (no SMB, no git, no node_bus reach) **or** a human-only gate (credentials UI, physical) blocks the agent. If unsure, try agent-side steps first; one short “blocked: X” line if truly stuck.
+
+## Cross-refs
+
+- `core-empire-workspace-rename-relocate-discipline.mdc` — renames/moves.
+- `core-discovered-paths-sync.mdc` — discovery after new roots.
+- `core-vms-handsfree-eyesfree-ux.mdc`, `core-vms-autonomy-handover.mdc` — autonomy defaults.

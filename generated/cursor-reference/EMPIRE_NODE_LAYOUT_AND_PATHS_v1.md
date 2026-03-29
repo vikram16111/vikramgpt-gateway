@@ -7,6 +7,7 @@
 ## Governance (Alzheimer’s-safe)
 
 - **VMS does not hand-create** new Empire-scoped projects on disk. **Ask an agent** to scaffold under the correct **`C:\Empire_<NODE_ID>\`** (or `C:\Empire` on HP) so naming, `node_bus`, and discovery stay consistent.
+- **New workspace folder naming (all nodes):** **`Project_<ProjectName>_<NODE>`** — prefix `Project`, suffix **node id** (`HP`, `AI_X1`, …), middle = descriptive name. Example: `Project_LAN_Connections_Nodes_HP`. Doctrine: `.cursor/rules/core-empire-project-workspace-naming.mdc`.
 - **Each node** may keep a **local** `generated\DISCOVERED_CURSOR_PATHS_LOCAL.txt`; **HP merges** into the **canonical** file via **`generated\cursor_paths_merge_sources.txt`** + `Sync_Discovered_Cursor_Paths.py`.
 
 ---
@@ -75,4 +76,4 @@ Strategic direction letter (Round 1): **`MyGPT_modification suggestions\Later_Em
 
 ---
 
-**Rev:** v1.2 — 2026-03-29 — `Project_LAN_Connections_Nodes_HP` rename + rename/relocate discipline pointer.
+**Rev:** v1.3 — 2026-03-29 — Mandatory `Project_<Name>_<NODE>` pattern for new workspaces; pointer to naming rule.
