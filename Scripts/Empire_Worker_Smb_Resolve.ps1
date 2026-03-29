@@ -62,6 +62,64 @@ function Test-EmpireIpIsThisMachine {
 
 
 
+function Remove-EmpireNetUseDriveLetter {
+
+    param([string]$DriveLetter)
+
+    $L = ($DriveLetter.TrimEnd(':')).ToUpperInvariant()
+
+    if ($L.Length -ne 1) { return }
+
+    $nr = Get-CmdNulQuietResolve
+
+    cmd.exe /c ('net use ' + $L + ': /delete /y ' + $nr)
+
+}
+
+
+
+function Remove-EmpireMappedDriveIfRemoteIsThisMachine {
+
+    param([string]$DriveLetter)
+
+    $L = ($DriveLetter.TrimEnd(':')).ToUpperInvariant()
+
+    if ($L.Length -ne 1) { return $false }
+
+    $lc = $L + ':'
+
+    $remote = $null
+
+    try {
+
+        $m = Get-SmbMapping -LocalPath $lc -ErrorAction Stop
+
+        if ($m -and $m.RemotePath) { $remote = $m.RemotePath.Trim() }
+
+    } catch {}
+
+    if (-not $remote) {
+
+        $net = cmd.exe /c "net use $lc" 2>&1 | Out-String
+
+        if ($net -match '(?im)Remote name\s+(\\\S+)') { $remote = $Matches[1].Trim() }
+
+    }
+
+    if (-not $remote -or $remote -notmatch '^\\\\(\d{1,3}(?:\.\d{1,3}){3})\\') { return $false }
+
+    $ip = $Matches[1]
+
+    if (-not (Test-EmpireIpIsThisMachine -Ip $ip)) { return $false }
+
+    Remove-EmpireNetUseDriveLetter -DriveLetter $L
+
+    return $true
+
+}
+
+
+
 function Convert-RepoRelPathToCandidate {
 
     param([string]$RelPath)

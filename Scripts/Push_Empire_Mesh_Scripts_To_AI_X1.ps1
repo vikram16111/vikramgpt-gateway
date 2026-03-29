@@ -40,7 +40,8 @@ $files = @(
     "Empire_Invoke_AI_X1_Mesh_Heal_OnDemand.ps1",
     "Empire_Ensure_HP_EmpireAiX1_Junction.ps1",
     "Submit_AI_X1_Admin_RunScript.ps1",
-    "Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1"
+    "Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1",
+    "Empire_Mirror_Register.ps1"
 )
 
 $hint = "C:\Empire\generated\health\empire_lan_worker_last_ip.txt"
@@ -88,6 +89,13 @@ foreach ($f in $files) {
     }
     Copy-Item -LiteralPath $fp -Destination (Join-Path $UncScripts $f) -Force
     Write-Host "OK: $f"
+}
+$regLib = Join-Path $PSScriptRoot "Empire_Mirror_Register.ps1"
+if (Test-Path -LiteralPath $regLib) {
+    try {
+        . $regLib
+        Add-EmpireMirrorRegisterEntry -SourceNode "HP" -Action "MESH_PUSH_SCRIPTS" -Target $UncScripts -Detail ("Push_Empire_Mesh_Scripts_To_AI_X1 count=" + $files.Count)
+    } catch {}
 }
 Write-Host "Done -> $UncScripts"
 $ipToSave = $WorkerIp

@@ -1,0 +1,39 @@
+---
+description: HP-controlled mesh mirroring, combined mirror register, ownership unchanged; nodes sync rules from HP.
+alwaysApply: true
+---
+
+# Empire — multi-node mirror, Git, and combined register
+
+## Control node
+
+- **HP (`C:\Empire`) is the control plane** for mesh policy, canonical scripts under `Scripts\`, and the **canonical** mirror register when HP performs pushes.
+- **AI_X1** (and future workers) follow the same **Cursor/Empire rules** as HP: run `Scripts\Sync_Empire_Shared_Cursor_Rules.ps1` after HP updates rules so doctrine stays aligned Empire-wide.
+
+## Z / Y and Git
+
+- **Z:** (HP → worker) and **Y:** (worker → HP) are **SMB views** of the other machine, not a replacement for Git.
+- **GitHub** remains the **system of record** for versioned history; mesh push/pull is for **operational scripts and local sync** when Git is impractical or before commit.
+- **Any clone** (HP or AI_X1) may **push** to GitHub only with valid credentials and **pull before push**. Do not paste PATs, `.pem`, or private keys in chat.
+
+## Mirroring direction (default)
+
+- **Default:** HP mirrors **to** nodes (e.g. `Push_Empire_Mesh_Scripts_To_AI_X1.ps1`, rule sync).
+- **Exception:** Nodes may mirror **to themselves** from HP (e.g. pull scripts, `git pull`) so work is not blocked when HP is temporarily unavailable. **Ownership and authorship do not change** because of direction: the **authoritative owner** of a file or repo path remains per project doctrine and git history, not “who last copied bits.”
+
+## Combined register (mandatory append)
+
+- After **successful** mesh push/pull that copies content, or after **git pull / git push** intended as a documented mirror/sync step, append one line to:
+  - **HP:** `C:\Empire\generated\logs\EMPIRE_MIRROR_REGISTER.md`
+  - **Node:** same relative path under that node’s Empire root (`C:\Empire_AI_X1\...` or `EMPIRE_ROOT`).
+- Use **`Scripts\Empire_Mirror_Register.ps1`** (`Add-EmpireMirrorRegisterEntry`) so the row format stays consistent.
+- Columns: **UTC timestamp**, **NODE** (`HP`, `AI_X1`, …), **ACTION** (e.g. `MESH_PUSH_SCRIPTS`, `MESH_PULL`, `GIT_PULL`, `GIT_PUSH`), **TARGET** (UNC path, repo name, or branch), **DETAIL** (short, no pipes).
+
+## Ownership and edits
+
+- Mirroring is **distribution**, not **reassignment**. **Write / edit / delete** authority follows existing **RESPONSIBILITY_MATRIX**, project `AGENTS.md`, and git **blame/PR** history.
+- Agents must not treat “copied to node” as “node-owned rewrite” without an explicit VMS or doctrine update.
+
+## LAN auto-resolve (HP)
+
+- Prefer **hostname + SMB** over manual IPs. Scripts **auto-remove** `Z:` if it targets **this PC’s own IPv4** and **auto-fallback** resolve when `-WorkerIp` fails (unless `-NoFallbackAutoResolve`). **SMB shares and firewall on AI_X1** must still be correct; automation cannot invent an open share.

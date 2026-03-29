@@ -16,7 +16,9 @@ param(
     [string]$AlsoPersistLastIpTo = "",
     [string]$TryTheseIpsFirst = "",
     # Off by default: neighbor sweep + /254 scan can take many minutes (looks "stuck"). Set -AllowSlowLanScan or EMPIRE_LAN_ALLOW_SLOW_LAN_SCAN=1 to enable.
-    [switch]$AllowSlowLanScan
+    [switch]$AllowSlowLanScan,
+    # If -WorkerIp is set but SMB probe fails, run full auto-resolve (DNS, files, EMPIRE_LAN_TRY_IPS, optional slow scan) excluding that IP. Default ON.
+    [switch]$NoFallbackAutoResolve
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +39,15 @@ if ([string]::IsNullOrWhiteSpace($PersistLastIpTo)) {
 
 $EmpireSmbResolveLib = Join-Path $PSScriptRoot "Empire_Worker_Smb_Resolve.ps1"
 if (Test-Path -LiteralPath $EmpireSmbResolveLib) { . $EmpireSmbResolveLib }
+
+$uM = [Environment]::GetEnvironmentVariable('EMPIRE_LAN_USER', 'Machine')
+$uU = [Environment]::GetEnvironmentVariable('EMPIRE_LAN_USER', 'User')
+if (-not [string]::IsNullOrWhiteSpace($uM)) { $Username = $uM }
+if (-not [string]::IsNullOrWhiteSpace($uU)) { $Username = $uU }
+$pM = [Environment]::GetEnvironmentVariable('EMPIRE_LAN_PASS', 'Machine')
+$pU = [Environment]::GetEnvironmentVariable('EMPIRE_LAN_PASS', 'User')
+if (-not [string]::IsNullOrWhiteSpace($pM)) { $Password = $pM }
+if (-not [string]::IsNullOrWhiteSpace($pU)) { $Password = $pU }
 
 function Write-Step {
     param([string]$Message)
@@ -195,7 +206,9 @@ function Resolve-WorkerIpDynamic {
 
     $fromFile = Read-LastKnownIpFromFiles -Paths $tryFiles
     if ($fromFile) {
-        if (Test-EmpireIpIsThisMachine -Ip $fromFile) {
+        if ($excluded.ContainsKey($fromFile)) {
+            Write-Step "SKIP: last-known IP $fromFile excluded (already probed / unreachable)."
+        } elseif (Test-EmpireIpIsThisMachine -Ip $fromFile) {
             Write-Step "SKIP: last-known IP file lists $fromFile = THIS PC (wrong). Delete or replace with AI_X1's IPv4 (ipconfig on worker)."
         } else {
             Write-Step "Trying last-known IP from file: $fromFile (SMB candidate shares)"
@@ -211,6 +224,7 @@ function Resolve-WorkerIpDynamic {
     foreach ($raw in @($CommaSeparatedIps -split ',')) {
         $ip = $raw.Trim()
         if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') {
+            if ($excluded.ContainsKey($ip)) { continue }
             if (Test-EmpireIpIsThisMachine -Ip $ip) {
                 Write-Step "SKIP fallback IP $ip (this PC, not worker)"
                 continue
@@ -231,6 +245,7 @@ function Resolve-WorkerIpDynamic {
             $dns = Resolve-DnsName $hn -ErrorAction Stop | Where-Object { $_.IPAddress } | Select-Object -First 1
             if ($dns -and $dns.IPAddress) {
                 $ip = [string]$dns.IPAddress
+                if ($excluded.ContainsKey($ip)) { continue }
                 if (Test-EmpireIpIsThisMachine -Ip $ip) { continue }
                 if (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs $TimeoutMs) {
                     $won = Test-WorkerSharesForIp -Ip $ip -ShareNames $ShareNames -User $Username -Pass $Password
@@ -253,6 +268,7 @@ function Resolve-WorkerIpDynamic {
     } catch {}
 
     foreach ($ip in $candidates) {
+        if ($excluded.ContainsKey($ip)) { continue }
         if (Test-EmpireIpIsThisMachine -Ip $ip) { continue }
         if (-not (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs $TimeoutMs)) { continue }
         $won = Test-WorkerSharesForIp -Ip $ip -ShareNames $ShareNames -User $Username -Pass $Password
@@ -264,6 +280,8 @@ function Resolve-WorkerIpDynamic {
         Write-Step "Scanning $prefix.0/24 for SMB (candidate shares) - may take several minutes"
         foreach ($n in 1..254) {
             $ip = "$prefix.$n"
+            if ($excluded.ContainsKey($ip)) { continue }
+            if (Test-EmpireIpIsThisMachine -Ip $ip) { continue }
             if (-not (Test-TcpPort -TargetAddress $ip -Port 445 -TimeoutMs ([Math]::Min(400, $TimeoutMs)))) { continue }
             $won = Test-WorkerSharesForIp -Ip $ip -ShareNames $ShareNames -User $Username -Pass $Password
             if ($won) {
@@ -414,6 +432,9 @@ if (-not [string]::IsNullOrWhiteSpace($ShareName)) {
 Write-Step "Starting Empire LAN link setup"
 Ensure-PrivateNetwork
 Ensure-DiscoveryAndSharing
+if (Remove-EmpireMappedDriveIfRemoteIsThisMachine -DriveLetter $DriveLetter) {
+    Write-Step "Auto-heal: removed ${DriveLetter}: (SMB target was this PC, not AI_X1)."
+}
 if (-not [string]::IsNullOrWhiteSpace($WorkerIp)) {
     $wip = $WorkerIp.Trim()
     if (Test-EmpireIpIsThisMachine -Ip $wip) {
@@ -422,12 +443,24 @@ if (-not [string]::IsNullOrWhiteSpace($WorkerIp)) {
     }
     Write-Step "Verifying $wip against SMB share candidates ($($shareNamesForProbe -join ', '))"
     $won = Test-WorkerSharesForIp -Ip $wip -ShareNames $shareNamesForProbe -User $Username -Pass $Password
-    if (-not $won) {
+    if (-not $won -and -not $NoFallbackAutoResolve) {
+        Write-Step "Explicit worker $wip not reachable; auto-resolving (DNS, last-known files, EMPIRE_LAN_TRY_IPS; excluding $wip)..."
+        $mergedFirst = $TryTheseIpsFirst
+        if ($env:EMPIRE_LAN_TRY_IPS) {
+            $mergedFirst = if ($mergedFirst) { "$env:EMPIRE_LAN_TRY_IPS,$mergedFirst" } else { $env:EMPIRE_LAN_TRY_IPS }
+        }
+        $WorkerIp = Resolve-WorkerIpDynamic -HostName $WorkerHost -TimeoutMs $ConnectTimeoutMs -ExtraLastKnownFiles $LastKnownIpFiles -CommaSeparatedIps $mergedFirst -ShareNames $shareNamesForProbe -Username $Username -Password $Password -EmpireRootForHealth $EmpireRoot -ExcludeIps @($wip)
+        if ([string]::IsNullOrWhiteSpace($WorkerIp)) {
+            Write-Host "[Empire-LAN] FAIL: Explicit worker $wip unreachable and auto-resolve found no other host with candidate shares. On AI_X1: enable File Sharing, share Empire_AI_X1 (or Empire\Empire_AI_X1), allow TCP 445 on Private network; set Machine env EMPIRE_LAN_USER / EMPIRE_LAN_PASS if needed. Or: -AllowSlowLanScan for subnet sweep." -ForegroundColor Yellow
+            exit 1
+        }
+    } elseif (-not $won) {
         Write-Host "[Empire-LAN] FAIL: No candidate share reachable from this PC. Edit generated\health\EMPIRE_WORKER_SMB_CANDIDATES.json or pass -ShareName." -ForegroundColor Yellow
         exit 1
+    } else {
+        $script:ResolvedWorkerShareName = $won
+        $WorkerIp = $wip
     }
-    $script:ResolvedWorkerShareName = $won
-    $WorkerIp = $wip
 } else {
     $mergedFirst = $TryTheseIpsFirst
     if ($env:EMPIRE_LAN_TRY_IPS) {

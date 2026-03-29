@@ -98,7 +98,11 @@ if (-not $remoteZ) {
 if ($remoteZ -match '^\\\\(\d{1,3}(?:\.\d{1,3}){3})\\') {
   $zSrv = $Matches[1]
   if (Test-EmpireIpIsThisMachine -Ip $zSrv) {
-    Write-Host "FAIL: Z: points at THIS PC ($zSrv), not AI_X1. Run Set_Empire_LAN_Link.ps1 -WorkerIp <IPv4 from ipconfig on AI_X1>." -ForegroundColor Yellow
+    if (Remove-EmpireMappedDriveIfRemoteIsThisMachine -DriveLetter $targetDriveLetter) {
+      Write-Host "Auto-heal: disconnected ${localPath} (was loopback to this PC). Re-run Set_Empire_LAN_Link.ps1 (or mesh heal), then this script." -ForegroundColor Yellow
+    } else {
+      Write-Host "FAIL: ${localPath} points at THIS PC ($zSrv), not AI_X1. Run Set_Empire_LAN_Link.ps1 after fixing SMB on AI_X1." -ForegroundColor Yellow
+    }
     exit 1
   }
 }
