@@ -1,0 +1,13 @@
+---
+description: Stub — full Empire doctrine on HP C:\Empire; use Z:\ or git clone to read canon.
+alwaysApply: true
+---
+
+# Pointer to HP canonical CORE
+
+- **Rules:** `C:\Empire\.cursor\rules\` on HP (or `\\HP-SPECTRE\Empire\.cursor\rules` / full clone under `repos\vikramgpt-gateway`).
+- **Mesh:** `C:\Empire\generated\cursor-reference\EMPIRE_MESH_LAN_PLANS_ABCD_v1.md`
+- **DNA skeleton:** `core-empire-multi-node-folder-dna.mdc`
+- **Rename discipline:** `core-empire-workspace-rename-relocate-discipline.mdc`
+
+On AI_X1, prefer **`git pull`** in `repos\vikramgpt-gateway` after HP pushes.

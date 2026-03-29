@@ -56,5 +56,6 @@ When VMS provides an **explicit absolute file path**, every agent must **attempt
 | `generated/cursor-reference/EMPIRE_NODE_LAYOUT_AND_PATHS_v1.md` | **Agreed placement:** Browser_Operator, Project_Openclaw, `Projects_schedular` vs `Projects_schedular_AI_X1`, `Project_LAN_Connections_Nodes_*`; VMS asks agents to create projects; HP-only audit TXT. |
 | `.cursor/rules/core-empire-workspace-rename-relocate-discipline.mdc` | **Rename / relocate / migrate:** grep old paths, align `generated_*` child folder, update layout doc, **`Sync_Discovered_Cursor_Paths.py`**, git, tasks, notify nodes. |
 | `.cursor/rules/core-empire-project-workspace-naming.mdc` | **New roots:** `Project_<ProjectName>_<NODE>`; agent scaffolds + discovery; **no postman busywork** when HP↔node is up; relay only when link or human gate blocks automation. |
+| `.cursor/rules/core-empire-multi-node-folder-dna.mdc` | **Same tree shape on all nodes** (Scripts, generated, Project_*_<NODE>, repos clone); **`Ensure_Empire_Worker_Node_Skeleton.ps1`** when SMB up. |
 | `generated/mygpt_share_crossref_report.md` | **Auto** matrix: `Scripts/verify_mygpt_share_crossref.py` — all MyGPT `.txt` vs 25 share corpora. |
 | `generated/CLOUD_SSH_FALLBACK_EMPIRE_v1.md` | Cloud SSH fallback; includes **live EC2 inventory** when run from Cursor + AWS CLI. |

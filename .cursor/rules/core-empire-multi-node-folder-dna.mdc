@@ -1,0 +1,39 @@
+---
+description: All Empire nodes keep a similar top-level DNA (Scripts, generated, Project_*_<NODE>, .cursor, repos) so human context matches HP.
+alwaysApply: true
+---
+
+# Empire — multi-node folder DNA (skeleton parity)
+
+## Intent
+
+When VMS opens **`C:\Empire`** on HP or **`C:\Empire_AI_X1`** (or mapped **`Z:\`**) on a worker, the **shape** of the tree should feel familiar: same role names, same kinds of folders, node suffix on satellite projects.
+
+## Required shape (worker / secondary node)
+
+| Area | Purpose |
+|------|---------|
+| **`Scripts\`** | Mesh + automation pushed from HP (canonical edits on HP; pull/push sync). |
+| **`generated\`** | Health, logs, discovery merge targets (`generated\health\`, `generated\logs\`, optional `DISCOVERED_CURSOR_PATHS_LOCAL.txt`). |
+| **`generated\cursor-reference\`** | Optional thin pointers or empty placeholder; full canon stays on HP `C:\Empire\generated\cursor-reference\`. |
+| **`.cursor\rules\`** | Full or stub rules per `Sync_Empire_Shared_Cursor_Rules.ps1` + `cursor_paths_full_rules_roots.txt`. |
+| **`Project_<Name>_<NODE>`** | Satellite workspaces (e.g. `Project_LAN_Connections_Nodes_AI_X1`). |
+| **`repos\`** | Git clones (e.g. `repos\vikramgpt-gateway`) — same remote as HP Empire repo. |
+
+## HP (`C:\Empire`)
+
+- **Canonical** repo root: Lambdas, `Scripts\`, `generated\`, `.cursor\rules\`, `Project_*_HP`, etc.
+- **Do not** require workers to host full `Lambda_*` tree unless a deliberate cutover doc says so.
+
+## Naming
+
+- **`Project_<ProjectName>_<NODE>`** — see `core-empire-project-workspace-naming.mdc`.
+
+## Automation
+
+- From HP when **SMB to worker is up**, run **`Scripts\Ensure_Empire_Worker_Node_Skeleton.ps1`** (default **`Z:\`**) to create dirs, optional **`git clone`**, LAN project mirror, and **`.cursor`** shell — then **`Sync_Discovered_Cursor_Paths.py`** + **`Sync_Empire_Shared_Cursor_Rules.ps1`** on HP.
+- On a worker **without** HP drive mapping, run the same script with **`-WorkerRoot C:\Empire_AI_X1`** (or actual root) locally.
+
+## Rename / migrate
+
+- **`core-empire-workspace-rename-relocate-discipline.mdc`** applies on every node.

@@ -1,0 +1,10 @@
+---
+description: Project_LAN_Connections_Nodes_AI_X1 — worker LAN docs; generated_Project_LAN_* ; HP sibling Project_LAN_Connections_Nodes_HP.
+alwaysApply: true
+---
+
+# Project_LAN_Connections_Nodes_AI_X1
+
+- **Outputs:** `generated_Project_LAN_Connections_Nodes_AI_X1\` only.
+- **HP pair:** `Project_LAN_Connections_Nodes_HP`.
+- **Scripts:** HP `C:\Empire\Scripts\` or local copy via mesh Push.

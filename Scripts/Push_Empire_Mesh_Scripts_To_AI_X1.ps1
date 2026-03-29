@@ -41,7 +41,8 @@ $files = @(
     "Empire_Ensure_HP_EmpireAiX1_Junction.ps1",
     "Submit_AI_X1_Admin_RunScript.ps1",
     "Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1",
-    "Empire_Mirror_Register.ps1"
+    "Empire_Mirror_Register.ps1",
+    "Ensure_Empire_Worker_Node_Skeleton.ps1"
 )
 
 $hint = "C:\Empire\generated\health\empire_lan_worker_last_ip.txt"
@@ -89,6 +90,12 @@ foreach ($f in $files) {
     }
     Copy-Item -LiteralPath $fp -Destination (Join-Path $UncScripts $f) -Force
     Write-Host "OK: $f"
+}
+$bundleSrc = Join-Path $src "Empire_Worker_Scaffold_Assets"
+if (Test-Path -LiteralPath $bundleSrc) {
+    $bundleDst = Join-Path $UncScripts "Empire_Worker_Scaffold_Assets"
+    Copy-Item -LiteralPath $bundleSrc -Destination $bundleDst -Recurse -Force
+    Write-Host "OK: Empire_Worker_Scaffold_Assets (recursive)"
 }
 $regLib = Join-Path $PSScriptRoot "Empire_Mirror_Register.ps1"
 if (Test-Path -LiteralPath $regLib) {

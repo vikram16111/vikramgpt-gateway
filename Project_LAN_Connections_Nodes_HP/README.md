@@ -3,7 +3,19 @@
 Dedicated Cursor workspace on **HP** for **Empire LAN / SMB mesh** between HP and workers (e.g. **AI_X1**).  
 **Naming:** folder prefix **`Project_`**, suffix **`_HP`** on this node; on **AI_X1** use **`Project_LAN_Connections_Nodes_AI_X1`** so names are not confused across machines.
 
-**Rename / move discipline:** `C:\Empire\.cursor\rules\core-empire-workspace-rename-relocate-discipline.mdc`
+**Rename / move discipline:** `C:\Empire\.cursor\rules\core-empire-workspace-rename-relocate-discipline.mdc`  
+**Same folder shape on every node:** `core-empire-multi-node-folder-dna.mdc`
+
+### Bootstrap worker (HP runs this when `Z:` is mapped)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Push_Empire_Mesh_Scripts_To_AI_X1.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Ensure_Empire_Worker_Node_Skeleton.ps1"
+python C:\Empire\Scripts\Sync_Discovered_Cursor_Paths.py
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Sync_Empire_Shared_Cursor_Rules.ps1"
+```
+
+`Ensure_*` creates on **`Z:\`**: `generated\health`, `generated\logs`, `generated\cursor-reference`, `repos\`, **`repos\vikramgpt-gateway`** (`git clone` if `git` in PATH and repo reachable), **`Project_LAN_Connections_Nodes_AI_X1`**, and a **`.cursor\rules`** pointer. On AI_X1 locally (no `Z:` from HP), run the same `Ensure_*` with **`-WorkerRoot C:\Empire_AI_X1`**.
 
 ---
 

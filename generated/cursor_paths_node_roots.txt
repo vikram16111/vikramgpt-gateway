@@ -1,0 +1,8 @@
+# Node roots merged into DISCOVERED_CURSOR_PATHS.txt — REQUIRED so Sync_Empire_Shared_Cursor_Rules.ps1
+# copies the same .mdc rules to AI_X1 (and any mapped clone), not only C:\Empire child folders.
+# After editing: run  python C:\Empire\Scripts\Sync_Discovered_Cursor_Paths.py  then re-run Sync_Empire_Shared_Cursor_Rules.ps1 on HP.
+# One absolute path per line. Lines starting with # are ignored.
+#
+# Use Z:\ when the drive letter maps to the Empire_AI_X1 share ROOT (typical). If your layout uses a subfolder only, change this line.
+
+Z:\

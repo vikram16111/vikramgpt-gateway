@@ -26,3 +26,7 @@ alwaysApply: true
 ## Rename / relocate
 
 - Follow **`core-empire-workspace-rename-relocate-discipline.mdc`** on `C:\Empire` (grep, discovery sync, layout docs, git).
+
+## Worker mirror
+
+- **`core-empire-multi-node-folder-dna.mdc`** + **`Ensure_Empire_Worker_Node_Skeleton.ps1`** when `Z:` is mapped (HP runs; no VMS postman).

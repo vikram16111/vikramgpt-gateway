@@ -52,6 +52,13 @@
 
 ---
 
+## Worker DNA (skeleton like HP)
+
+- **Doctrine:** `.cursor/rules/core-empire-multi-node-folder-dna.mdc` — `Scripts\`, `generated\`, `.cursor\rules`, `Project_*_<NODE>`, `repos\vikramgpt-gateway`.
+- **HP push + scaffold:** `Push_Empire_Mesh_Scripts_To_AI_X1.ps1` then **`Scripts\Ensure_Empire_Worker_Node_Skeleton.ps1`** (default `Z:\`; or `-WorkerRoot C:\Empire_AI_X1` on the worker). Assets under **`Scripts\Empire_Worker_Scaffold_Assets\`**.
+
+---
+
 ## Cursor rules — hybrid (“Starlink” model)
 
 - **CORE (full rules):** `C:\Empire\.cursor\rules\` on HP.
@@ -76,4 +83,4 @@ Strategic direction letter (Round 1): **`MyGPT_modification suggestions\Later_Em
 
 ---
 
-**Rev:** v1.3 — 2026-03-29 — Mandatory `Project_<Name>_<NODE>` pattern for new workspaces; pointer to naming rule.
+**Rev:** v1.4 — 2026-03-29 — Worker DNA skeleton + `Ensure_Empire_Worker_Node_Skeleton.ps1` / `repos\vikramgpt-gateway` clone path.
