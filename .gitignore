@@ -26,6 +26,7 @@ Project_Openclaw/anthropic_profile/
 Project_Openclaw/zapier_profile/
 **/secrets-backup/**
 **/*secrets*backup*/
+!generated/secrets_backups/README.md
 **/env_var_secret*/**
 **/env_var*.env
 *.env

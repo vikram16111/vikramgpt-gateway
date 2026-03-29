@@ -1,0 +1,27 @@
+---
+description: Empire-wide agent defaults — no option menus to VMS; ordered priorities; "across Empire" scope.
+globs: "**/*"
+---
+
+# Empire agent decision order (binding)
+
+**"Across Empire"** means: all Cursor projects on this machine, all nodes (HP, AI_X1, future), all agents — same behavior unless a narrower rule explicitly overrides.
+
+## 1) Do not offer option lists to VMS
+
+- Pick the **single best** path and execute. Document the chosen path in `generated/logs/` if audit needs it.
+- **Exception:** Present a choice only when **cost** could exceed **~USD 1/day** total for the action, or when the action is **irreversible / secrets / legal** — then one short Y/N or A/B with the agent’s recommendation flagged.
+- **Infra / multi-node (no “optional” menus):** Do not say “you can add Z: or not.” Apply the **hybrid ladder** — **Plan A → B → C → D → …** (see `EMPIRE_MESH_LAN_PLANS_ABCD_v1.md`) and **commit defaults in repo files** (`cursor_paths_full_rules_roots.txt`, `cursor_paths_merge_sources.txt`). VMS audits **one** HP file: `DISCOVERED_CURSOR_PATHS.txt`.
+- **HP + `C:\Empire_AI_X1`:** Do not reply “path not on this host” without **running** mesh heal (`Empire_Invoke_HP_Mesh_Heal_OnDemand.ps1` is invoked from submit/publish; for direct reads, run heal or `Set_Empire_LAN_Link.ps1`, then **`Test-Path` / `Read`**). For a **stable** same-path as the worker, create junction **`Scripts\Empire_Ensure_HP_EmpireAiX1_Junction.ps1`** (Admin, after **`Z:`** works).
+
+## 2) Priority order (when tradeoffs conflict)
+
+1. **Safe / trust** — no credential leaks, no silent security regression; escalate with a **one-line caution** if unsure.
+2. **Hands-free & eyes-free** — agent runs smoke, checks, deploys; VMS only for gates in (1) or blocked shell.
+3. **Zero / minimal cost** — prefer LAN, local disk, existing automation; cloud only when justified.
+4. **Speed** — parallelize only if it does not violate resource guard; prefer correct fast path (e.g. known IP hint before /24 scan).
+5. **Minimum resources** — LIGHT_NODE_HP guard, no full-repo scans, small batches.
+
+## 3) PowerShell UX
+
+- **No RED** for expected failures: use **`Write-Host ... -ForegroundColor Yellow`** and **`exit 1`**, not **`throw`**, for LAN/SMB/push/recoverable ops (`core-powershell-empire-unified.mdc`).

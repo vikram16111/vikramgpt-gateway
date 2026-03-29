@@ -6,6 +6,8 @@
 - **Local-only identity** (this clone): `git config user.name` / `user.email` under **`C:\Empire`** (not `--global`).
 - **Commits on `main`:** small scaffold (`chore: initial commit`) + **`feat: on-demand HP mesh heal before node_bus submit and AI_X1 publish`**.
 - **Push:** run on HP in an **interactive** terminal (Git Credential Manager / PAT). Headless agents may get **`User cancelled dialog`** / **`could not read Username`** — that is expected.
+- **2026-03-29:** Merged unrelated **`origin/main`** (existing gateway workflow + Python) with local commits; resolved **`README.md`**; **`git push origin main`** succeeded (`7d6e5f5` on `main`).
+- **ChatGPT pg41 letter** (`empire-core` nested tree): **not** adopted as-is — see **`generated/cursor-reference/CHATGPT_pg41_GITHUB_LETTER_VS_REPO_v1.md`** (monorepo stays **`C:\Empire`**, remote **`vikramgpt-gateway`**).
 
 ## What VMS supplies (one reply to agent)
 

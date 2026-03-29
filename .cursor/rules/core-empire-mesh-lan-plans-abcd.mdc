@@ -34,6 +34,8 @@ When LAN/share is up, agents **run** (do not delegate to VMS): **`Scripts\Publis
 
 **`Submit_AI_X1_Admin_RunScript.ps1`** and **`Publish_AI_X1_Discovered_CursorPaths_From_HP.ps1`** call **`Scripts\Empire_Invoke_HP_Mesh_Heal_OnDemand.ps1`** when the worker path is missing — runs **`Empire_Node_Mesh_Heal.ps1 -NodeRole HP`** (remap **`Z:`**, re-resolve worker IP). Scheduled logon heal still applies; this adds **job-time** heal so agents do not “wait for share to be up” without trying.
 
+**AI_X1 (worker) symmetric:** **`Scripts\Empire_Invoke_AI_X1_Mesh_Heal_OnDemand.ps1`** — run before jobs that need **`Y:`** / HP **`Empire`** share; calls **`Empire_Node_Mesh_Heal.ps1 -NodeRole AI_X1`**. Copy-paste block: **`generated/cursor-reference/AI_X1_ON_DEMAND_MESH_COPYPASTE_v1.md`**.
+
 ## Local secrets
 
 Passwords only in **Machine** env or **`generated\secrets_local\`** (gitignored). Never commit; never paste full secrets in chat.

@@ -1,0 +1,70 @@
+---
+description: Bidirectional UNC all nodes — resolve paths via routes (HP↔AI_X1); rule sync pushes to every discovered Cursor root
+alwaysApply: true
+---
+
+# Empire — cross-node filesystem read & talk (everyone ↔ everyone)
+
+## Policy (canonical)
+
+**`Scripts/empire_node_routes.json`** declares **`everyone_read_everywhere`** and **`bidirectional_all_nodes`**. Agents must **behave** that way on **every machine** (HP, AI_X1, future nodes): do not treat “wrong drive letter” as “missing” until **UNC / mapped share** paths from routes are tried.
+
+**Mesh down / new node / router change:** follow **`generated/cursor-reference/EMPIRE_MESH_LAN_PLANS_ABCD_v1.md`** and **`core-empire-mesh-lan-plans-abcd.mdc`** (Plans A→D; each node can run its own Heal role).
+
+**“Talk” (commands, not just files):** **`Invoke_Empire_Remote_Node_Command.ps1`** + **`node_bus`** folders under each node’s **`node_bus_roots`** in the same JSON — free-first order per routes.
+
+## Bidirectional SMB (read files)
+
+| You are on | VMS path looks like | Try in order |
+|------------|---------------------|--------------|
+| **HP** | `C:\Empire_AI_X1\...` | **`C:\Empire_AI_X1\...`** if **junction** exists (**`Scripts\Empire_Ensure_HP_EmpireAiX1_Junction.ps1`**, Admin, after **`Z:`** works) → else **`Z:\...`** → **`\\192.168.1.38\Empire_AI_X1\...`** |
+| **AI_X1** | `C:\Empire\...` (HP repo) | **`\\HP-SPECTRE\Empire\...`** or **`\\192.168.1.42\Empire\...`** (confirm HP Windows share name matches **`Empire`**) → node_bus / remote invoke if SMB blocked |
+| **Either** | Same node local path | **`Read` / `Test-Path` as given** first |
+
+**HP `lan_shares` in JSON** includes **`C:\Empire`** plus UNC candidates so tooling on AI_X1 can resolve HP paths without hand-pasting.
+
+## Mandatory resolution (detail)
+
+1. Path **as given** (works when Cursor runs **on that node**).
+2. **`Z:\`** mapped equivalent when **`Z:\Empire_AI_X1`** is the AI_X1 share on HP.
+3. **All `lan_shares`** for the **target** node from **`empire_node_routes.json`**, appending the **relative path** after the share root (`Empire_AI_X1\` or `Empire\`).
+4. **`Invoke_Empire_Remote_Node_Command.ps1`** (or node_bus drop) if SMB from the agent environment fails.
+5. **IP drift:** prefer UNC that **`Test-Path` succeeds**; update **`empire_node_routes.json`** after VMS confirms current LAN layout.
+
+## Who maps **`Z:`** / **`Y:`**? (not the AI agent)
+
+Each **node** maps **only its peer** (bidirectional read, two tasks):
+
+| Machine | Drive | Task name | Register (Admin, one line) |
+|---------|-------|-----------|----------------------------|
+| **HP** | **`Z:`** → AI_X1 | `Empire_LAN_Dynamic_Map_AI_X1` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Empire\Scripts\Register_Empire_LAN_Dynamic_Map_Scheduled.ps1"` |
+| **AI_X1** | **`Y:`** → HP `Empire` share | `Empire_LAN_Dynamic_Map_HP` | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Empire_AI_X1\Scripts\Register_Empire_LAN_Dynamic_Map_Scheduled_From_AI_X1.ps1"` |
+
+- **HP task** runs **`Empire_LAN_Dynamic_Map_AI_X1.ps1`** → **`Set_Empire_LAN_Link.ps1`** (dynamic IP to **`AI-X1`**, share **`Empire_AI_X1`**). **Trigger:** ~**15 min after logon** (HP not 24/7 is OK). **Env:** **`EMPIRE_LAN_USER`**, **`EMPIRE_LAN_PASS`** (machine).
+- **AI_X1 task** runs **`Empire_LAN_Dynamic_Map_HP.ps1`** → **`Set_Empire_LAN_Link.ps1`** (dynamic IP to **`HP-SPECTRE`**, share **`Empire`**). **Triggers:** ~**15 min after startup** and ~**15 min after logon** (24/7 friendly). **Env:** **`EMPIRE_LAN_HP_USER`**, **`EMPIRE_LAN_HP_PASS`** (machine).
+- **Do not** register the **same** task twice with **SYSTEM** and **`-UseInteractiveUser`** — last registration wins; pick one.
+- **Health:** HP → **`generated/health/EMPIRE_AI_X1_LAN_ENDPOINT.json`**; AI_X1 → **`generated/health/EMPIRE_HP_LAN_ENDPOINT.json`**.
+- **New nodes:** part of setup — **`generated/NODE_SETUP_GUIDE_v1.md` §14–§17** + **`NEW_PROJECT_SETUP_GUIDE.md`** checklist item 9.
+
+## Cursor rules on all nodes (not only HP agents)
+
+- **Canonical rules** live under **`C:\Empire\.cursor\rules\`** on HP.
+- **Copies** are pushed to **every** workspace root listed in **`generated/DISCOVERED_CURSOR_PATHS.txt`** when you run **`Scripts\Sync_Empire_Shared_Cursor_Rules.ps1`** on HP.
+- **Include AI_X1 as a root:** ensure **`Z:\Empire_AI_X1`** (or the live UNC) is listed in **`generated/cursor_paths_node_roots.txt`**, then run **`python Scripts\Sync_Discovered_Cursor_Paths.py`** (or your map refresh) **before** sync so **`Z:\Empire_AI_X1\.cursor\rules`** receives the same copies as HP child projects.
+- **Cursor on AI_X1 only:** open **`C:\Empire_AI_X1`** as workspace — rules sync there when that path is in the discovery list **or** copy via **`Deploy_Empire_Scripts_To_AI_X1_Share.ps1`** for scripts; **rules** still flow from **`Sync_Empire_Shared_Cursor_Rules.ps1`** targets.
+
+## What agents must not do
+
+- Claim **“path does not exist”** after only **`C:\Empire_AI_X1`** on HP when that letter is not mounted.
+- Assume **only HP** needs updated **`.mdc`** files — sync is **multi-root**; missing AI_X1 in discovery means stale rules on the mini PC.
+
+## Remote / cloud limitation
+
+If the **runtime has no SMB** (isolated cloud agent), say so after **one** UNC attempt.
+
+## Reference
+
+- **`C:\Empire\Scripts\empire_node_routes.json`**
+- **`C:\Empire\Scripts\Invoke_Empire_Remote_Node_Command.ps1`**
+- **`C:\Empire\Scripts\Set_Empire_LAN_Link.ps1`**
+- **`C:\Empire\Scripts\Test_Empire_Comms_Bidirectional.ps1`**
